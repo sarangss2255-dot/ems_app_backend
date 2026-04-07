@@ -1,23 +1,34 @@
 const Classroom = require("../models/classroom");
 const User = require("../models/user");
-const { generateSeating } = require("../utils/seating");
+const { generateSeating, findStudentSeat } = require("../utils/seating");
 
 async function mySeat(req, res) {
   try {
     const student = req.user;
-    // find a classroom that includes student's className
-    const cls = await Classroom.findOne({ classesAllowed: student.className });
-    if (!cls) return res.status(404).json({ error: "No classroom found for your class" });
+    const classroom = await Classroom.findOne({ classesAllowed: student.className }).lean();
+    if (!classroom) return res.status(404).json({ error: "No classroom found for your class" });
 
-    const students = await User.find({ role: "student", className: { $in: cls.classesAllowed } }).sort({ className: 1, rollNumber: 1 }).lean();
-    const seating = generateSeating(cls.toObject(), students);
+    const students = await User.find({
+      role: "student",
+      className:
+        Array.isArray(classroom.classesAllowed) && classroom.classesAllowed.length
+          ? { $in: classroom.classesAllowed }
+          : { $exists: true, $ne: null }
+    })
+      .sort({ className: 1, rollNumber: 1 })
+      .lean();
 
-    // find seat where student.id matches
-    const seat = seating.find(s => s.student && String(s.student.id) === String(student._id));
+    const { seating } = generateSeating(classroom, students);
+    const seat = findStudentSeat(seating, student._id);
     if (!seat) return res.status(404).json({ error: "Seat not assigned" });
-    res.json({ classroom: cls.name, seat });
+
+    return res.json({
+      classroom: classroom.name,
+      seat,
+      seating
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 }
 

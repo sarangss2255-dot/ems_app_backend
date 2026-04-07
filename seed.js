@@ -1,21 +1,23 @@
 // seed.js
-const mongoose = require("mongoose");
 require("dotenv").config();
 const connectDB = require("./config/db");
 const User = require("./models/user");
 const Classroom = require("./models/classroom");
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
+
+const SEED_PASSWORD = "pass123";
 
 async function seed() {
   await connectDB();
+  const hashedPassword = await bcrypt.hash(SEED_PASSWORD, 10);
 
   // admin
-  if (!await User.findOne({ username: "admin" })) {
-    const h = await bcrypt.hash("admin123", 10);
-    const admin = new User({ username: "admin", password: h, fullName: "Administrator", role: "admin" });
-    await admin.save();
-    console.log("admin created");
-  }
+  await User.updateOne(
+    { username: "admin" },
+    { $set: { password: hashedPassword, fullName: "Administrator", role: "admin" } },
+    { upsert: true }
+  );
+  console.log("admin upserted");
 
   // sample classroom
   if (!await Classroom.findOne({ name: "B-101" })) {
@@ -34,31 +36,41 @@ async function seed() {
   }
 
   // create teachers
-  if (!await User.findOne({ username: "teacher1" })) {
-    const h = await bcrypt.hash("teach123", 10);
-    const t = new User({ username: "teacher1", password: h, fullName: "T One", role: "teacher" });
-    await t.save();
-    console.log("teacher1 created");
-  }
+  await User.updateOne(
+    { username: "teacher1" },
+    { $set: { password: hashedPassword, fullName: "T One", role: "teacher" } },
+    { upsert: true }
+  );
+  console.log("teacher1 upserted");
 
   // create some students across classes
-  const existing = await User.findOne({ username: "s1" });
-  if (!existing) {
-    let students = [];
-    let idx = 1;
-    for (let clsName of ["CSE-A","CSE-B","CSE-C"]) {
-      for (let r = 1; r <= (clsName==="CSE-A"?8:(clsName==="CSE-B"?7:5)); r++) {
-        const username = `s${idx}`;
-        const pwd = await bcrypt.hash("student123", 10);
-        students.push({ username, password: pwd, fullName: `${clsName}-Student-${r}`, role: "student", rollNumber: r, className: clsName });
-        idx++;
-      }
+  const studentOps = [];
+  let idx = 1;
+  for (let clsName of ["CSE-A","CSE-B","CSE-C"]) {
+    for (let r = 1; r <= (clsName==="CSE-A"?8:(clsName==="CSE-B"?7:5)); r++) {
+      const username = `s${idx}`;
+      studentOps.push({
+        updateOne: {
+          filter: { username },
+          update: {
+            $set: {
+              password: hashedPassword,
+              fullName: `${clsName}-Student-${r}`,
+              role: "student",
+              rollNumber: r,
+              className: clsName
+            }
+          },
+          upsert: true
+        }
+      });
+      idx++;
     }
-    await User.insertMany(students);
-    console.log("students created");
   }
+  await User.bulkWrite(studentOps);
+  console.log("students upserted");
 
-  console.log("Seed done");
+  console.log(`Seed done (default password: ${SEED_PASSWORD})`);
   process.exit(0);
 }
 

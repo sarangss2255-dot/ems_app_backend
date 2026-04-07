@@ -18,6 +18,27 @@ router.get(
 );
 
 router.get(
+  "/classrooms/:id",
+  authMiddleware,
+  requireRole("admin"),
+  adminController.getClassroomById
+);
+
+router.put(
+  "/classrooms/:id",
+  authMiddleware,
+  requireRole("admin"),
+  adminController.updateClassroom
+);
+
+router.delete(
+  "/classrooms/:id",
+  authMiddleware,
+  requireRole("admin"),
+  adminController.deleteClassroom
+);
+
+router.get(
   "/classrooms/:id/generate",
   authMiddleware,
   requireRole("admin"),

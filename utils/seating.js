@@ -1,111 +1,125 @@
-// utils/seating.js
-/**
- * classroom: { rows, benchesPerRow, seatsPerBench, capacity, pattern, gap }
- * students: array of student docs sorted in desired order (e.g., by class then roll)
- *
- * Returns seating array:
- *  [{ seatIndex, row, bench, seatPosition (1..seatsPerBench), student: {...} | null }, ...]
- */
-function generateSeating(classroom, students) {
-  const rows = classroom.rows;
-  const benches = classroom.benchesPerRow;
-  const perBench = classroom.seatsPerBench;
-  const pattern = classroom.pattern || "normal";
-  const gap = classroom.gap || 0;
+const { buildStudentFeatureMap, pairRiskScore } = require("./antiCheat");
 
-  const seatsPerRow = benches * perBench;
-  const totalCapacity = rows * seatsPerRow;
+function generateSeating(classroom, students, options = {}) {
+  const rows = Number(classroom.rows || 0);
+  const benchesPerRow = Number(classroom.benchesPerRow || 0);
+  const seatsPerBench = Number(classroom.seatsPerBench || 2);
+  const capacity = rows * benchesPerRow * seatsPerBench;
+  const totalStudents = students.length;
+  const studentPool = students.slice(0, capacity);
+  const featureMap = buildStudentFeatureMap(studentPool, options.metrics || {});
 
-  // Build seat slots in row order: row 1 bench1 seats..., bench2 seats..., row2...
-  let seatSlots = [];
-  let seatIndex = 0;
-  for (let r = 1; r <= rows; r++) {
-    for (let b = 1; b <= benches; b++) {
-      for (let s = 1; s <= perBench; s++) {
-        seatIndex++;
-        seatSlots.push({ seatIndex, row: r, bench: b, seatPosition: s });
+  const seating = Array.from({ length: rows }, () =>
+    Array.from({ length: benchesPerRow }, () => Array.from({ length: seatsPerBench }, () => null))
+  );
+  const placedSeats = [];
+
+  for (let row = 0; row < rows; row++) {
+    for (let bench = 0; bench < benchesPerRow; bench++) {
+      for (let seat = 0; seat < seatsPerBench; seat++) {
+        if (!studentPool.length) break;
+        const candidateResult = pickLowestRiskCandidate(
+          studentPool,
+          row,
+          bench,
+          seat,
+          seating,
+          placedSeats,
+          featureMap
+        );
+        if (!candidateResult) continue;
+        const { student, risk } = candidateResult;
+        seating[row][bench][seat] = student;
+        placedSeats.push({ row, bench, seat, student, risk });
+        const idx = studentPool.findIndex((s) => String(s._id) === String(student._id));
+        if (idx >= 0) studentPool.splice(idx, 1);
       }
     }
   }
 
-  // Trim to capacity if capacity < total slots
-  const cap = Math.min(classroom.capacity || totalCapacity, seatSlots.length);
-  seatSlots = seatSlots.slice(0, cap);
-
-  // Prepare list of students to place (may include multiple classes mixed)
-  // students is an array of objects: { _id, rollNumber, className, fullName }
-  // We'll work with indices and then map into seatSlots
-  let seating = new Array(cap).fill(null);
-
-  if (pattern === "normal") {
-    for (let i = 0; i < cap; i++) {
-      const stud = students[i] || null;
-      seating[i] = {
-        ...seatSlots[i],
-        student: stud ? { id: stud._id, rollNumber: stud.rollNumber, className: stud.className, fullName: stud.fullName } : null
-      };
+  return {
+    seating,
+    report: {
+      model: "weighted-linear-risk-v1",
+      placed: placedSeats.length,
+      requested: totalStudents,
+      maxCapacity: capacity,
+      unseated: Math.max(totalStudents - capacity, 0),
+      averagePairRisk: average(placedSeats.map((x) => x.risk))
     }
-  } else if (pattern === "gap" && gap > 0) {
-    // place students with spacing:
-    let pos = 0;
-    for (let i = 0; i < students.length && pos < cap; i++) {
-      seating[pos] = {
-        ...seatSlots[pos],
-        student: { id: students[i]._id, rollNumber: students[i].rollNumber, className: students[i].className, fullName: students[i].fullName }
-      };
-      pos += gap;
-      if (pos >= cap && i < students.length - 1) {
-        // when pos exceeds capacity, wrap to next available slot (seek first empty)
-        pos = seating.findIndex((s) => s === null);
-        if (pos === -1) break;
-      }
-    }
-    // fill other slots with remaining students or empty
-    let fillIdx = 0;
-    for (let i = 0; i < cap; i++) {
-      if (!seating[i]) {
-        // find next student unplaced
-        while (fillIdx < students.length && seating.some(s => s && s.student && String(s.student.id) === String(students[fillIdx]._id))) {
-          fillIdx++;
-        }
-        const stud = students[fillIdx] || null;
-        seating[i] = {
-          ...seatSlots[i],
-          student: stud ? { id: stud._id, rollNumber: stud.rollNumber, className: stud.className, fullName: stud.fullName } : null
-        };
-        fillIdx++;
-      }
-    }
-  } else if (pattern === "zigzag") {
-    // zigzag across benches per row: alternate direction of benches every row
-    // construct seatSlots grouped by row
-    let groupedByRow = [];
-    for (let r = 1; r <= rows; r++) {
-      const start = (r - 1) * seatsPerRow;
-      const rowSlots = seatSlots.slice(start, start + seatsPerRow);
-      if (r % 2 === 0) rowSlots.reverse();
-      groupedByRow = groupedByRow.concat(rowSlots);
-    }
-    for (let i = 0; i < cap; i++) {
-      const slot = groupedByRow[i];
-      const stud = students[i] || null;
-      seating[i] = {
-        ...slot,
-        student: stud ? { id: stud._id, rollNumber: stud.rollNumber, className: stud.className, fullName: stud.fullName } : null
-      };
-    }
-  } else {
-    // fallback to normal
-    for (let i = 0; i < cap; i++) {
-      const stud = students[i] || null;
-      seating[i] = {
-        ...seatSlots[i],
-        student: stud ? { id: stud._id, rollNumber: stud.rollNumber, className: stud.className, fullName: stud.fullName } : null
-      };
-    }
-  }
-
-  return seating;
+  };
 }
 
-module.exports = { generateSeating };
+function pickLowestRiskCandidate(pool, row, bench, seat, seating, placedSeats, featureMap) {
+  if (!pool.length) return null;
+
+  let bestStudent = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const student of pool) {
+    const neighbors = getNeighborStudents(row, bench, seat, seating, placedSeats);
+    const scores = neighbors.map((n) => {
+      const pair = pairRiskScore(student, n.student, featureMap);
+      return pair * n.weight;
+    });
+    const score = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+    if (score < bestScore) {
+      bestScore = score;
+      bestStudent = student;
+    }
+  }
+
+  return bestStudent ? { student: bestStudent, risk: round(bestScore) } : null;
+}
+
+function getNeighborStudents(row, bench, seat, seating, placedSeats) {
+  const neighbors = [];
+
+  const benchSeats = seating[row]?.[bench] || [];
+  for (let i = 0; i < benchSeats.length; i++) {
+    if (i !== seat && benchSeats[i]) neighbors.push({ student: benchSeats[i], weight: 1.0 });
+  }
+
+  const leftBench = seating[row]?.[bench - 1] || [];
+  for (const s of leftBench) if (s) neighbors.push({ student: s, weight: 0.55 });
+  const rightBench = seating[row]?.[bench + 1] || [];
+  for (const s of rightBench) if (s) neighbors.push({ student: s, weight: 0.45 });
+
+  const frontRow = seating[row - 1]?.[bench] || [];
+  for (const s of frontRow) if (s) neighbors.push({ student: s, weight: 0.5 });
+
+  for (const placed of placedSeats) {
+    if (placed.row === row && Math.abs(placed.bench - bench) <= 2) {
+      neighbors.push({ student: placed.student, weight: 0.25 });
+    }
+  }
+
+  return neighbors;
+}
+
+function findStudentSeat(seating, studentId) {
+  for (let row = 0; row < seating.length; row++) {
+    for (let bench = 0; bench < seating[row].length; bench++) {
+      for (let seat = 0; seat < seating[row][bench].length; seat++) {
+        const student = seating[row][bench][seat];
+        if (student && String(student._id || student.id) === String(studentId)) {
+          return { row: row + 1, bench: bench + 1, seat: seat + 1, student };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function average(values) {
+  if (!values.length) return 0;
+  return round(values.reduce((a, b) => a + b, 0) / values.length);
+}
+
+function round(value) {
+  return Math.round(value * 1000) / 1000;
+}
+
+module.exports = {
+  generateSeating,
+  findStudentSeat
+};
