@@ -14,7 +14,7 @@ async function seed() {
   // admin
   await User.updateOne(
     { username: "admin" },
-    { $set: { password: hashedPassword, fullName: "Administrator", role: "admin" } },
+    { $set: { password: hashedPassword, initialPassword: SEED_PASSWORD, fullName: "Administrator", role: "admin" } },
     { upsert: true }
   );
   console.log("admin upserted");
@@ -38,7 +38,7 @@ async function seed() {
   // create teachers
   await User.updateOne(
     { username: "teacher1" },
-    { $set: { password: hashedPassword, fullName: "T One", role: "teacher" } },
+    { $set: { password: hashedPassword, initialPassword: SEED_PASSWORD, fullName: "T One", role: "teacher" } },
     { upsert: true }
   );
   console.log("teacher1 upserted");
@@ -55,6 +55,7 @@ async function seed() {
           update: {
             $set: {
               password: hashedPassword,
+              initialPassword: SEED_PASSWORD,
               fullName: `${clsName}-Student-${r}`,
               role: "student",
               rollNumber: r,

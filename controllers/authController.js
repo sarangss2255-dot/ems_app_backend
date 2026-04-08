@@ -1,4 +1,5 @@
 const User = require("../models/user");
+const Classroom = require("../models/classroom");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
@@ -13,8 +14,29 @@ async function register(req, res) {
     if (existing) return res.status(400).json({ error: "username exists" });
     const allowedRole = ["admin", "teacher", "student"].includes(role) ? role : "student";
     const hash = await bcrypt.hash(password, 10);
-    const user = new User({ username, password: hash, fullName, role: allowedRole, rollNumber, className });
+    const user = new User({
+      username,
+      password: hash,
+      initialPassword: password,
+      fullName,
+      role: allowedRole,
+      rollNumber,
+      className
+    });
     await user.save();
+    if (allowedRole === "teacher") {
+      const staffedClassroomIds = await User.find({
+        role: "teacher",
+        assignedClassroom: { $ne: null }
+      }).distinct("assignedClassroom");
+      const openClassroom = await Classroom.findOne({
+        _id: { $nin: staffedClassroomIds }
+      }).sort({ createdAt: 1, name: 1 });
+      if (openClassroom) {
+        user.assignedClassroom = openClassroom._id;
+        await user.save();
+      }
+    }
     res.json({ ok: true, id: user._id });
   } catch (err) {
     res.status(500).json({ error: err.message });

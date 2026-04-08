@@ -9,10 +9,9 @@ function generateSeating(classroom, students, options = {}) {
   const studentPool = students.slice(0, capacity);
   const featureMap = buildStudentFeatureMap(studentPool, options.metrics || {});
 
-  const seating = Array.from({ length: rows }, () =>
-    Array.from({ length: benchesPerRow }, () => Array.from({ length: seatsPerBench }, () => null))
-  );
+  const seating = createEmptySeating(rows, benchesPerRow, seatsPerBench);
   const placedSeats = [];
+  const benchViolations = [];
 
   for (let row = 0; row < rows; row++) {
     for (let bench = 0; bench < benchesPerRow; bench++) {
@@ -29,7 +28,7 @@ function generateSeating(classroom, students, options = {}) {
         );
         if (!candidateResult) continue;
         const { student, risk } = candidateResult;
-        seating[row][bench][seat] = student;
+        seating[row][bench][seat] = sanitizeStudent(student);
         placedSeats.push({ row, bench, seat, student, risk });
         const idx = studentPool.findIndex((s) => String(s._id) === String(student._id));
         if (idx >= 0) studentPool.splice(idx, 1);
@@ -37,31 +36,67 @@ function generateSeating(classroom, students, options = {}) {
     }
   }
 
+  for (let row = 0; row < seating.length; row++) {
+    for (let bench = 0; bench < seating[row].length; bench++) {
+      const classes = seating[row][bench].filter(Boolean).map((student) => student.className).filter(Boolean);
+      if (new Set(classes).size !== classes.length) {
+        benchViolations.push({ row: row + 1, bench: bench + 1 });
+      }
+    }
+  }
+
   return {
     seating,
     report: {
-      model: "weighted-linear-risk-v1",
+      model: "hard-bench-separation-v2",
       placed: placedSeats.length,
       requested: totalStudents,
       maxCapacity: capacity,
       unseated: Math.max(totalStudents - capacity, 0),
-      averagePairRisk: average(placedSeats.map((x) => x.risk))
+      averagePairRisk: average(placedSeats.map((x) => x.risk)),
+      sameClassBenchViolations: benchViolations.length,
+      benchViolations
     }
   };
+}
+
+function createEmptySeating(rows, benchesPerRow, seatsPerBench) {
+  return Array.from({ length: rows }, () =>
+    Array.from({ length: benchesPerRow }, () => Array.from({ length: seatsPerBench }, () => null))
+  );
 }
 
 function pickLowestRiskCandidate(pool, row, bench, seat, seating, placedSeats, featureMap) {
   if (!pool.length) return null;
 
+  const benchOccupants = (seating[row]?.[bench] || []).filter(Boolean);
+  const hardSafeCandidates = pool.filter(
+    (student) => !benchOccupants.some((peer) => peer.className && peer.className === student.className)
+  );
+  const candidatePool = hardSafeCandidates.length ? hardSafeCandidates : pool;
+
   let bestStudent = null;
   let bestScore = Number.POSITIVE_INFINITY;
-  for (const student of pool) {
+  for (const student of candidatePool) {
     const neighbors = getNeighborStudents(row, bench, seat, seating, placedSeats);
     const scores = neighbors.map((n) => {
       const pair = pairRiskScore(student, n.student, featureMap);
       return pair * n.weight;
     });
-    const score = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+    const sameClassBenchPenalty = benchOccupants.some(
+      (peer) => peer.className && peer.className === student.className
+    )
+      ? 100
+      : 0;
+    const nearbySameClassPenalty = neighbors.some(
+      (neighbor) => neighbor.student.className && neighbor.student.className === student.className
+    )
+      ? 0.8
+      : 0;
+    const score =
+      (scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0) +
+      sameClassBenchPenalty +
+      nearbySameClassPenalty;
     if (score < bestScore) {
       bestScore = score;
       bestStudent = student;
@@ -96,6 +131,28 @@ function getNeighborStudents(row, bench, seat, seating, placedSeats) {
   return neighbors;
 }
 
+function sanitizeStudent(student) {
+  if (!student) return null;
+  return {
+    _id: student._id || student.id,
+    username: student.username || "",
+    fullName: student.fullName || "",
+    rollNumber: Number(student.rollNumber || 0),
+    className: student.className || ""
+  };
+}
+
+function normalizeStoredSeating(seating) {
+  if (!Array.isArray(seating)) return [];
+  return seating.map((row) =>
+    Array.isArray(row)
+      ? row.map((bench) =>
+          Array.isArray(bench) ? bench.map((student) => (student ? sanitizeStudent(student) : null)) : []
+        )
+      : []
+  );
+}
+
 function findStudentSeat(seating, studentId) {
   for (let row = 0; row < seating.length; row++) {
     for (let bench = 0; bench < seating[row].length; bench++) {
@@ -110,6 +167,71 @@ function findStudentSeat(seating, studentId) {
   return null;
 }
 
+function moveStudent(seatingInput, studentId, targetPosition) {
+  const seating = normalizeStoredSeating(seatingInput);
+  const current = findStudentSeat(seating, studentId);
+  if (!current) throw new Error("Student not found in seating plan");
+
+  const target = getSeatByPosition(seating, targetPosition);
+  if (!target) throw new Error("Target seat is out of range");
+
+  const movedStudent = current.student;
+  seating[current.row - 1][current.bench - 1][current.seat - 1] = target.student || null;
+  seating[target.row - 1][target.bench - 1][target.seat - 1] = movedStudent;
+
+  return {
+    seating,
+    movedStudent,
+    from: current,
+    to: {
+      row: target.row,
+      bench: target.bench,
+      seat: target.seat,
+      student: movedStudent
+    },
+    swappedStudent: target.student || null
+  };
+}
+
+function getSeatByPosition(seating, position = {}) {
+  const row = Number(position.row || 0);
+  const bench = Number(position.bench || 0);
+  const seat = Number(position.seat || 0);
+  if (!row || !bench || !seat) return null;
+  const student = seating[row - 1]?.[bench - 1]?.[seat - 1];
+  if (typeof student === "undefined") return null;
+  return { row, bench, seat, student };
+}
+
+function seatingToCsv(classroomName, seating) {
+  const lines = [["Classroom", classroomName], ["Row", "Bench", "Seat", "Student Name", "Username", "Roll Number", "Class"]];
+
+  for (let row = 0; row < seating.length; row++) {
+    for (let bench = 0; bench < seating[row].length; bench++) {
+      for (let seat = 0; seat < seating[row][bench].length; seat++) {
+        const student = seating[row][bench][seat];
+        lines.push([
+          String(row + 1),
+          String(bench + 1),
+          String(seat + 1),
+          student?.fullName || "",
+          student?.username || "",
+          student?.rollNumber != null ? String(student.rollNumber) : "",
+          student?.className || ""
+        ]);
+      }
+    }
+  }
+
+  return lines.map((line) => line.map(escapeCsv).join(",")).join("\n");
+}
+
+function escapeCsv(value) {
+  const text = String(value ?? "");
+  if (!/[",\n]/.test(text)) return text;
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
 function average(values) {
   if (!values.length) return 0;
   return round(values.reduce((a, b) => a + b, 0) / values.length);
@@ -120,6 +242,11 @@ function round(value) {
 }
 
 module.exports = {
+  createEmptySeating,
+  findStudentSeat,
   generateSeating,
-  findStudentSeat
+  moveStudent,
+  normalizeStoredSeating,
+  sanitizeStudent,
+  seatingToCsv
 };
