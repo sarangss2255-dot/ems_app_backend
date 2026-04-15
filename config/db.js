@@ -7,13 +7,8 @@ async function connectDB() {
     throw new Error("DB_URI (or MONGO_URI) is not set in environment");
   }
 
-  try {
-    await mongoose.connect(DB_URI);
-    console.log("Connected to MongoDB");
-  } catch (error) {
-    console.error("Error connecting to MongoDB:", error.message);
-    process.exit(1);
-  }
+  await mongoose.connect(DB_URI);
+  console.log("Connected to MongoDB");
 }
 
 module.exports = connectDB;
