@@ -9,6 +9,12 @@ const SEED_PASSWORD = "pass123";
 
 async function seed() {
   await connectDB();
+  console.log("Using database: ems_app");
+
+  // Drop users collection to remove old indexes
+  await User.collection.drop().catch(() => {});
+  console.log("Cleared users collection");
+
   const hashedPassword = await bcrypt.hash(SEED_PASSWORD, 10);
 
   // admin
@@ -46,14 +52,17 @@ async function seed() {
   // create some students across classes
   const studentOps = [];
   let idx = 1;
+  const currentYear = new Date().getFullYear();
   for (let clsName of ["CSE-A","CSE-B","CSE-C"]) {
     for (let r = 1; r <= (clsName==="CSE-A"?8:(clsName==="CSE-B"?7:5)); r++) {
       const username = `s${idx}`;
+      const studentId = `ADYPU-SOE-${currentYear}-${clsName}-${r.toString().padStart(3, '0')}`;
       studentOps.push({
         updateOne: {
           filter: { username },
           update: {
             $set: {
+              studentId,
               password: hashedPassword,
               initialPassword: SEED_PASSWORD,
               fullName: `${clsName}-Student-${r}`,
