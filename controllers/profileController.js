@@ -1,56 +1,6 @@
 const User = require("../models/user");
 const bcrypt = require("bcryptjs");
-
-// In-memory settings storage (in production, use database)
-let appSettings = {
-  appName: "Exam Management System",
-  instituteName: "ADYPU SOE",
-  logoUrl: "",
-  contactEmail: "admin@adypu.edu.in",
-  contactPhone: "",
-  address: "",
-  termsAndConditions: `TERMS AND CONDITIONS
-
-Last Updated: ${new Date().toLocaleDateString()}
-
-1. INTRODUCTION
-Welcome to the Exam Management System. By accessing and using this system, you agree to be bound by these terms and conditions.
-
-2. USER ACCOUNTS
-- Each user is responsible for maintaining the confidentiality of their account credentials.
-- Users must provide accurate and complete information during registration.
-- The system administrators reserve the right to suspend or terminate accounts that violate these terms.
-
-3. USAGE GUIDELINES
-- This system is intended for academic examination management purposes only.
-- Users must not attempt to access unauthorized data or systems.
-- Any attempt to manipulate exam seating arrangements is strictly prohibited.
-
-4. DATA PRIVACY
-- The system collects and processes personal information as necessary for exam management.
-- User data will be handled in accordance with applicable privacy regulations.
-- Users have the right to access and correct their personal data.
-
-5. ACADEMIC INTEGRITY
-- Any form of cheating during examinations will be reported to appropriate authorities.
-- Students must follow all examination rules and regulations.
-- Invigilators must report any suspicious behavior immediately.
-
-6. LIABILITY
-- The institution shall not be liable for any loss or damage arising from the use of this system.
-- Users use this system at their own risk.
-
-7. MODIFICATIONS
-- The administration reserves the right to modify these terms and conditions at any time.
-- Continued use of the system after modifications constitutes acceptance of the new terms.
-
-8. CONTACT
-For questions about these terms, please contact the system administrator.`,
-  allowStudentLogin: true,
-  allowTeacherLogin: true,
-  examDurationBuffer: 15, // minutes
-  defaultPassword: "pass123"
-};
+const { getAppSettings, updateAppSettings } = require("../config/appSettings");
 
 // Get current user profile
 async function getProfile(req, res) {
@@ -110,6 +60,7 @@ async function changePassword(req, res) {
 // Get app settings (public endpoint)
 async function getSettings(req, res) {
   try {
+    const appSettings = getAppSettings();
     // Return settings without sensitive data
     const publicSettings = {
       appName: appSettings.appName,
@@ -118,10 +69,12 @@ async function getSettings(req, res) {
       contactEmail: appSettings.contactEmail,
       contactPhone: appSettings.contactPhone,
       address: appSettings.address,
+      termsAndConditions: appSettings.termsAndConditions,
       allowStudentLogin: appSettings.allowStudentLogin,
       allowTeacherLogin: appSettings.allowTeacherLogin,
       examDurationBuffer: appSettings.examDurationBuffer,
-      defaultPassword: appSettings.defaultPassword
+      defaultPassword: appSettings.defaultPassword,
+      seatingStrategy: appSettings.seatingStrategy
     };
     res.json(publicSettings);
   } catch (err) {
@@ -143,22 +96,26 @@ async function updateSettings(req, res) {
       allowStudentLogin,
       allowTeacherLogin,
       examDurationBuffer,
-      defaultPassword
+      defaultPassword,
+      seatingStrategy
     } = req.body;
 
-    if (appName !== undefined) appSettings.appName = appName;
-    if (instituteName !== undefined) appSettings.instituteName = instituteName;
-    if (logoUrl !== undefined) appSettings.logoUrl = logoUrl;
-    if (contactEmail !== undefined) appSettings.contactEmail = contactEmail;
-    if (contactPhone !== undefined) appSettings.contactPhone = contactPhone;
-    if (address !== undefined) appSettings.address = address;
-    if (termsAndConditions !== undefined) appSettings.termsAndConditions = termsAndConditions;
-    if (allowStudentLogin !== undefined) appSettings.allowStudentLogin = allowStudentLogin;
-    if (allowTeacherLogin !== undefined) appSettings.allowTeacherLogin = allowTeacherLogin;
-    if (examDurationBuffer !== undefined) appSettings.examDurationBuffer = examDurationBuffer;
-    if (defaultPassword !== undefined) appSettings.defaultPassword = defaultPassword;
+    const nextSettings = updateAppSettings({
+      appName,
+      instituteName,
+      logoUrl,
+      contactEmail,
+      contactPhone,
+      address,
+      termsAndConditions,
+      allowStudentLogin,
+      allowTeacherLogin,
+      examDurationBuffer,
+      defaultPassword,
+      seatingStrategy
+    });
 
-    res.json({ ok: true, settings: appSettings });
+    res.json({ ok: true, settings: nextSettings });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -167,6 +124,7 @@ async function updateSettings(req, res) {
 // Get terms and conditions (public endpoint)
 async function getTerms(req, res) {
   try {
+    const appSettings = getAppSettings();
     res.json({ terms: appSettings.termsAndConditions });
   } catch (err) {
     res.status(500).json({ error: err.message });

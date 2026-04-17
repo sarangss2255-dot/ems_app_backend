@@ -6,6 +6,7 @@ const CheatingIncident = require("../models/CheatingIncident");
 const { generateSeating, moveStudent, normalizeStoredSeating, seatingToCsv } = require("../utils/seating");
 const mongoose = require("mongoose");
 const { parseSpreadsheetBuffer, mapStudentRow, mapClassroomRow, mapTeacherRow } = require("../utils/uploadParsers");
+const { getAppSettings } = require("../config/appSettings");
 
 async function createClassroom(req, res) {
   try {
@@ -525,7 +526,10 @@ async function generateAndPersistSeating(classroom, actionLabel) {
     .lean();
 
   const metrics = await buildStudentMetrics(students.map((s) => s._id));
-  const result = generateSeating(classroom, students, { metrics });
+  const result = generateSeating(classroom, students, {
+    metrics,
+    seatingStrategy: getAppSettings().seatingStrategy
+  });
 
   classroom.seatingPlan = result.seating;
   classroom.antiCheatReport = result.report;

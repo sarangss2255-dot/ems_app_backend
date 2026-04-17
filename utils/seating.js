@@ -6,26 +6,70 @@ function generateSeating(classroom, students, options = {}) {
   const seatsPerBench = Number(classroom.seatsPerBench || 2);
   const capacity = rows * benchesPerRow * seatsPerBench;
   const totalStudents = students.length;
-  const studentPool = students.slice(0, capacity);
-  const featureMap = buildStudentFeatureMap(studentPool, options.metrics || {});
+  const basePool = students.slice(0, capacity);
+  const featureMap = buildStudentFeatureMap(basePool, options.metrics || {});
+  const selectedStrategy = String(options.seatingStrategy || "reinforcement-guided").toLowerCase();
 
+  if (selectedStrategy === "greedy") {
+    return generateGreedySeating(rows, benchesPerRow, seatsPerBench, capacity, totalStudents, basePool, featureMap);
+  }
+
+  const episodeCount = Math.max(4, Math.min(Number(options.rlEpisodes || 12), 30));
+  const qTable = {};
+
+  let bestResult = null;
+  for (let episode = 0; episode < episodeCount; episode++) {
+    const epsilon = Math.max(0.05, 0.28 - episode * 0.02);
+    const alpha = 0.22;
+    const episodeResult = runReinforcementEpisode(
+      rows,
+      benchesPerRow,
+      seatsPerBench,
+      basePool,
+      featureMap,
+      qTable,
+      { epsilon, alpha }
+    );
+    if (!bestResult || episodeResult.totalScore < bestResult.totalScore) {
+      bestResult = episodeResult;
+    }
+  }
+
+  const seating = bestResult?.seating || createEmptySeating(rows, benchesPerRow, seatsPerBench);
+  const placedSeats = bestResult?.placedSeats || [];
+  const benchViolations = bestResult?.benchViolations || [];
+
+  return {
+    seating,
+    report: {
+      model: "reinforcement-guided-seat-policy-v1",
+      placed: placedSeats.length,
+      requested: totalStudents,
+      maxCapacity: capacity,
+      unseated: Math.max(totalStudents - capacity, 0),
+      averagePairRisk: bestResult ? round(bestResult.averageRisk) : average(placedSeats.map((x) => x.risk)),
+      sameClassBenchViolations: benchViolations.length,
+      benchViolations,
+      reinforcementLearning: {
+        strategy: "epsilon-greedy contextual seat policy",
+        episodes: episodeCount,
+        exploredStates: Object.keys(qTable).length,
+        score: bestResult ? round(bestResult.totalScore) : 0
+      }
+    }
+  };
+}
+
+function generateGreedySeating(rows, benchesPerRow, seatsPerBench, capacity, totalStudents, basePool, featureMap) {
   const seating = createEmptySeating(rows, benchesPerRow, seatsPerBench);
+  const studentPool = basePool.slice();
   const placedSeats = [];
-  const benchViolations = [];
 
   for (let row = 0; row < rows; row++) {
     for (let bench = 0; bench < benchesPerRow; bench++) {
       for (let seat = 0; seat < seatsPerBench; seat++) {
         if (!studentPool.length) break;
-        const candidateResult = pickLowestRiskCandidate(
-          studentPool,
-          row,
-          bench,
-          seat,
-          seating,
-          placedSeats,
-          featureMap
-        );
+        const candidateResult = pickGreedyCandidate(studentPool, row, bench, seat, seating, placedSeats, featureMap);
         if (!candidateResult) continue;
         const { student, risk } = candidateResult;
         seating[row][bench][seat] = sanitizeStudent(student);
@@ -36,15 +80,7 @@ function generateSeating(classroom, students, options = {}) {
     }
   }
 
-  for (let row = 0; row < seating.length; row++) {
-    for (let bench = 0; bench < seating[row].length; bench++) {
-      const classes = seating[row][bench].filter(Boolean).map((student) => student.className).filter(Boolean);
-      if (new Set(classes).size !== classes.length) {
-        benchViolations.push({ row: row + 1, bench: bench + 1 });
-      }
-    }
-  }
-
+  const benchViolations = collectBenchViolations(seating);
   return {
     seating,
     report: {
@@ -55,8 +91,69 @@ function generateSeating(classroom, students, options = {}) {
       unseated: Math.max(totalStudents - capacity, 0),
       averagePairRisk: average(placedSeats.map((x) => x.risk)),
       sameClassBenchViolations: benchViolations.length,
-      benchViolations
+      benchViolations,
+      reinforcementLearning: {
+        strategy: "disabled",
+        episodes: 0,
+        exploredStates: 0,
+        score: 0
+      }
     }
+  };
+}
+
+function runReinforcementEpisode(rows, benchesPerRow, seatsPerBench, basePool, featureMap, qTable, config) {
+  const seating = createEmptySeating(rows, benchesPerRow, seatsPerBench);
+  const studentPool = shuffle(basePool.slice());
+  const placedSeats = [];
+
+  for (let row = 0; row < rows; row++) {
+    for (let bench = 0; bench < benchesPerRow; bench++) {
+      for (let seat = 0; seat < seatsPerBench; seat++) {
+        if (!studentPool.length) break;
+        const candidateResult = pickReinforcementCandidate(
+          studentPool,
+          row,
+          bench,
+          seat,
+          seating,
+          placedSeats,
+          featureMap,
+          qTable,
+          config
+        );
+        if (!candidateResult) continue;
+
+        const { student, risk, reward, seatKey } = candidateResult;
+        seating[row][bench][seat] = sanitizeStudent(student);
+        placedSeats.push({ row, bench, seat, student, risk, reward });
+        updateQValue(qTable, seatKey, student.className || "__unknown__", reward, config.alpha);
+
+        const idx = studentPool.findIndex((s) => String(s._id) === String(student._id));
+        if (idx >= 0) studentPool.splice(idx, 1);
+      }
+    }
+  }
+
+  const benchViolations = collectBenchViolations(seating);
+  const totalScore = evaluateSeatingScore(seating, featureMap);
+  const terminalReward = -totalScore;
+  for (const placement of placedSeats) {
+    updateQValue(
+      qTable,
+      seatStateKey(placement.row, placement.bench, placement.seat),
+      placement.student.className || "__unknown__",
+      terminalReward,
+      config.alpha * 0.6
+    );
+  }
+
+  return {
+    seating,
+    placedSeats,
+    benchViolations,
+    totalScore,
+    averageRisk: average(placedSeats.map((x) => x.risk))
   };
 }
 
@@ -66,7 +163,48 @@ function createEmptySeating(rows, benchesPerRow, seatsPerBench) {
   );
 }
 
-function pickLowestRiskCandidate(pool, row, bench, seat, seating, placedSeats, featureMap) {
+function pickReinforcementCandidate(pool, row, bench, seat, seating, placedSeats, featureMap, qTable, config) {
+  if (!pool.length) return null;
+
+  const benchOccupants = (seating[row]?.[bench] || []).filter(Boolean);
+  const hardSafeCandidates = pool.filter(
+    (student) => !benchOccupants.some((peer) => peer.className && peer.className === student.className)
+  );
+  const candidatePool = hardSafeCandidates.length ? hardSafeCandidates : pool;
+  const seatKey = seatStateKey(row, bench, seat);
+
+  let bestCandidate = null;
+  let bestPolicyScore = Number.POSITIVE_INFINITY;
+  const exploredCandidates = [];
+  for (const student of candidatePool) {
+    const score = computeLocalSeatScore(student, row, bench, seat, seating, placedSeats, featureMap);
+    const learnedBias = getQValue(qTable, seatKey, student.className || "__unknown__");
+    const policyScore = score - learnedBias;
+    exploredCandidates.push({ student, score, policyScore });
+    if (policyScore < bestPolicyScore) {
+      bestPolicyScore = policyScore;
+      bestCandidate = { student, score };
+    }
+  }
+
+  if (!bestCandidate) return null;
+
+  let selected = bestCandidate;
+  if (Math.random() < config.epsilon && exploredCandidates.length > 1) {
+    const ranked = exploredCandidates.sort((a, b) => a.policyScore - b.policyScore).slice(0, 3);
+    const exploratory = ranked[Math.floor(Math.random() * ranked.length)];
+    selected = { student: exploratory.student, score: exploratory.score };
+  }
+
+  return {
+    student: selected.student,
+    risk: round(selected.score),
+    reward: round(-selected.score),
+    seatKey
+  };
+}
+
+function pickGreedyCandidate(pool, row, bench, seat, seating, placedSeats, featureMap) {
   if (!pool.length) return null;
 
   const benchOccupants = (seating[row]?.[bench] || []).filter(Boolean);
@@ -78,25 +216,7 @@ function pickLowestRiskCandidate(pool, row, bench, seat, seating, placedSeats, f
   let bestStudent = null;
   let bestScore = Number.POSITIVE_INFINITY;
   for (const student of candidatePool) {
-    const neighbors = getNeighborStudents(row, bench, seat, seating, placedSeats);
-    const scores = neighbors.map((n) => {
-      const pair = pairRiskScore(student, n.student, featureMap);
-      return pair * n.weight;
-    });
-    const sameClassBenchPenalty = benchOccupants.some(
-      (peer) => peer.className && peer.className === student.className
-    )
-      ? 100
-      : 0;
-    const nearbySameClassPenalty = neighbors.some(
-      (neighbor) => neighbor.student.className && neighbor.student.className === student.className
-    )
-      ? 0.8
-      : 0;
-    const score =
-      (scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0) +
-      sameClassBenchPenalty +
-      nearbySameClassPenalty;
+    const score = computeLocalSeatScore(student, row, bench, seat, seating, placedSeats, featureMap);
     if (score < bestScore) {
       bestScore = score;
       bestStudent = student;
@@ -129,6 +249,80 @@ function getNeighborStudents(row, bench, seat, seating, placedSeats) {
   }
 
   return neighbors;
+}
+
+function computeLocalSeatScore(student, row, bench, seat, seating, placedSeats, featureMap) {
+  const benchOccupants = (seating[row]?.[bench] || []).filter(Boolean);
+  const neighbors = getNeighborStudents(row, bench, seat, seating, placedSeats);
+  const scores = neighbors.map((n) => pairRiskScore(student, n.student, featureMap) * n.weight);
+  const sameClassBenchPenalty = benchOccupants.some(
+    (peer) => peer.className && peer.className === student.className
+  )
+    ? 100
+    : 0;
+  const nearbySameClassPenalty = neighbors.some(
+    (neighbor) => neighbor.student.className && neighbor.student.className === student.className
+  )
+    ? 0.8
+    : 0;
+  return (scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0) +
+    sameClassBenchPenalty +
+    nearbySameClassPenalty;
+}
+
+function evaluateSeatingScore(seating, featureMap) {
+  let totalRisk = 0;
+  let occupiedSeats = 0;
+
+  for (let row = 0; row < seating.length; row++) {
+    for (let bench = 0; bench < seating[row].length; bench++) {
+      for (let seat = 0; seat < seating[row][bench].length; seat++) {
+        const student = seating[row][bench][seat];
+        if (!student) continue;
+        occupiedSeats += 1;
+        totalRisk += computeLocalSeatScore(student, row, bench, seat, seating, [], featureMap);
+      }
+    }
+  }
+
+  const benchViolations = collectBenchViolations(seating).length;
+  const normalizedRisk = occupiedSeats ? totalRisk / occupiedSeats : 0;
+  return normalizedRisk + benchViolations * 25;
+}
+
+function collectBenchViolations(seating) {
+  const benchViolations = [];
+  for (let row = 0; row < seating.length; row++) {
+    for (let bench = 0; bench < seating[row].length; bench++) {
+      const classes = seating[row][bench].filter(Boolean).map((student) => student.className).filter(Boolean);
+      if (new Set(classes).size !== classes.length) {
+        benchViolations.push({ row: row + 1, bench: bench + 1 });
+      }
+    }
+  }
+  return benchViolations;
+}
+
+function seatStateKey(row, bench, seat) {
+  return `r${row + 1}-b${bench + 1}-s${seat + 1}`;
+}
+
+function getQValue(qTable, seatKey, className) {
+  return qTable[seatKey]?.[className] || 0;
+}
+
+function updateQValue(qTable, seatKey, className, reward, alpha) {
+  if (!qTable[seatKey]) qTable[seatKey] = {};
+  const current = qTable[seatKey][className] || 0;
+  qTable[seatKey][className] = current + alpha * (reward - current);
+}
+
+function shuffle(items) {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+  return items;
 }
 
 function sanitizeStudent(student) {

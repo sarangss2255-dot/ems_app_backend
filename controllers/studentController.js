@@ -3,6 +3,7 @@ const User = require("../models/user");
 const Attendance = require("../models/Attendance");
 const CheatingIncident = require("../models/CheatingIncident");
 const { generateSeating, findStudentSeat, normalizeStoredSeating } = require("../utils/seating");
+const { getAppSettings } = require("../config/appSettings");
 
 async function mySeat(req, res) {
   try {
@@ -43,7 +44,10 @@ async function ensureSeating(classroom) {
     .lean();
 
   const metrics = await buildStudentMetrics(students.map((s) => s._id));
-  const result = generateSeating(classroom, students, { metrics });
+  const result = generateSeating(classroom, students, {
+    metrics,
+    seatingStrategy: getAppSettings().seatingStrategy
+  });
   classroom.seatingPlan = result.seating;
   classroom.antiCheatReport = result.report;
   classroom.seatingGeneratedAt = new Date();
