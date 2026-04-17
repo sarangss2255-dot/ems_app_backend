@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Smart Examination Management System - A0 Poster</title>
+
+  <style>
+    @page {
+      size: A0 portrait;
+      margin: 0;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+      background: #0a0a0a;
+    }
+
+    /* POSTER EXACT A0 */
+    .poster {
+      width: 841mm;
+      height: 1189mm;
+      margin: 0 auto;
+      background: linear-gradient(180deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* DECORATIVE ELEMENTS */
+    .poster::before {
+      content: "";
+      position: absolute;
+      top: -200mm;
+      left: -200mm;
+      width: 600mm;
+      height: 600mm;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, transparent 70%);
+    }
+
+    .poster::after {
+      content: "";
+      position: absolute;
+      bottom: -200mm;
+      right: -200mm;
+      width: 600mm;
+      height: 600mm;
+      background: radial-gradient(circle, rgba(6, 182, 212, 0.1) 0%, transparent 70%);
+    }
+
+    /* HEADER */
+    .header {
+      text-align: center;
+      background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #06b6d4 100%);
+      color: white;
+      padding: 25mm 15mm;
+      position: relative;
+      z-index: 1;
+    }
+
+    .header::after {
+      content: "";
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 8mm;
+      background: linear-gradient(90deg, #6366f1, #22d3ee);
+    }
+
+    .logo {
+      position: relative;
+      z-index: 1;
+    }
+
+    .logo img {
+      width: 160mm;
+      filter: drop-shadow(0 6mm 12mm rgba(0, 0, 0, 0.4));
+    }
+
+    .title {
+      font-size: 24mm;
+      font-weight: 800;
+      margin-top: 8mm;
+      letter-spacing: 1.5mm;
+      text-shadow: 0 4mm 8mm rgba(0, 0, 0, 0.3);
+      position: relative;
+      z-index: 1;
+    }
+
+    .subtitle {
+      font-size: 11mm;
+      margin-top: 5mm;
+      opacity: 0.95;
+      font-weight: 300;
+      letter-spacing: 2mm;
+      text-transform: uppercase;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* GRID */
+    .content {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12mm;
+      padding: 12mm;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* SECTION */
+    .section {
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(10mm);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 8mm;
+      border-radius: 6mm;
+      box-shadow: 0 8mm 32mm rgba(0, 0, 0, 0.4);
+    }
+
+    /* ARROW TITLE */
+    .arrow {
+      background: linear-gradient(90deg, #6366f1, #8b5cf6);
+      color: white;
+      padding: 5mm 14mm;
+      font-size: 11mm;
+      font-weight: 700;
+      display: inline-block;
+      border-radius: 4mm;
+      margin-bottom: 6mm;
+      text-transform: uppercase;
+      letter-spacing: 1mm;
+      box-shadow: 0 4mm 16mm rgba(99, 102, 241, 0.4);
+    }
+
+    /* PARAGRAPH TEXT */
+    p {
+      font-size: 8mm;
+      line-height: 1.7;
+      color: #cbd5e1;
+      margin-bottom: 4mm;
+    }
+
+    p:last-child {
+      margin-bottom: 0;
+    }
+
+    /* WORKFLOW BOX */
+    .box-row {
+      display: flex;
+      align-items: center;
+      gap: 4mm;
+      margin-top: 6mm;
+      justify-content: center;
+    }
+
+    .box {
+      background: linear-gradient(135deg, #1e3a8a, #3b82f6);
+      color: white;
+      padding: 5mm 6mm;
+      border-radius: 3mm;
+      font-size: 7mm;
+      text-align: center;
+      flex: 1;
+      font-weight: 600;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 4mm 12mm rgba(59, 130, 246, 0.3);
+    }
+
+    .arrow-text {
+      font-size: 10mm;
+      color: #22d3ee;
+      font-weight: bold;
+    }
+
+    /* SMALL GRID */
+    .small-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6mm;
+    }
+
+    /* HIGHLIGHT BOX */
+    .highlight-box {
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.1));
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      border-radius: 4mm;
+      padding: 6mm;
+      margin-top: 6mm;
+    }
+
+    .highlight-box .title {
+      font-size: 10mm;
+      color: #a5b4fc;
+      margin-bottom: 4mm;
+      font-weight: 600;
+    }
+
+    /* TECH STACK */
+    .tech-stack {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3mm;
+      margin-top: 4mm;
+    }
+
+    .tech-item {
+      background: rgba(99, 102, 241, 0.2);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      color: #a5b4fc;
+      padding: 2mm 5mm;
+      border-radius: 2mm;
+      font-size: 5mm;
+      font-weight: 600;
+    }
+
+    /* METRICS */
+    .metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 4mm;
+      margin-top: 4mm;
+    }
+
+    .metric {
+      text-align: center;
+      padding: 4mm;
+      background: rgba(6, 182, 212, 0.1);
+      border-radius: 3mm;
+      border: 1px solid rgba(6, 182, 212, 0.2);
+    }
+
+    .metric-value {
+      font-size: 14mm;
+      font-weight: 800;
+      color: #22d3ee;
+    }
+
+    .metric-label {
+      font-size: 5mm;
+      color: #94a3b8;
+      margin-top: 2mm;
+    }
+
+    /* FOOTER */
+    .footer {
+      text-align: center;
+      padding: 8mm;
+      background: linear-gradient(90deg, #1e3a8a, #3b82f6, #06b6d4);
+      color: white;
+      font-size: 9mm;
+      position: relative;
+      z-index: 1;
+    }
+
+    .footer::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2mm;
+      background: linear-gradient(90deg, #6366f1, #22d3ee);
+    }
+
+    .footer-text {
+      font-weight: 300;
+      letter-spacing: 1mm;
+    }
+
+    .footer-highlight {
+      color: #22d3ee;
+      font-weight: 700;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="poster">
+
+    <!-- HEADER -->
+    <div class="header">
+      <div class="logo">
+        <img src="logo-ADYPU SOE.png" alt="ADYPU School of Engineering">
+      </div>
+      <div class="title">Smart Examination Management System</div>
+      <div class="subtitle">AI-Powered Seating Allocation • Anti-Cheating • Real-Time Monitoring</div>
+    </div>
+
+    <div class="content">
+
+      <!-- LEFT COLUMN -->
+      <div>
+
+        <div class="section">
+          <div class="arrow">Problem Statement</div>
+          <p>Manual examination seating allocation is labor-intensive and prone to human errors during large-scale
+            exams. The traditional approach requires administrators to manually place hundreds of students, which
+            consumes significant time and resources.</p>
+          <p>Predictable seating arrangements increase the probability of cheating as students from the same class tend
+            to be seated near each other. Without algorithmic constraints, same-class students may end up on the same
+            bench, making it easier to copy or communicate during the examination.</p>
+          <p>Traditional invigilation lacks real-time monitoring capabilities, making it difficult to detect suspicious
+            activities or manage examination halls efficiently. There is no automated system that ensures fair and
+            risk-aware seat distribution across the examination venue.</p>
+          <p>Inefficient bulk student data management through spreadsheets leads to data entry errors and makes it
+            challenging to maintain accurate records. The lack of integration between student databases and seating
+            allocation systems creates additional operational overhead.</p>
+        </div>
+
+        <br>
+
+        <div class="section">
+          <div class="arrow">Objectives</div>
+          <p>Develop an automated seating allocation system using heuristic optimization algorithms that can process
+            hundreds of students within seconds. The system should minimize human intervention while maximizing seating
+            efficiency.</p>
+          <p>Implement risk-based seat distribution to minimize cheating probability by ensuring students from the same
+            class are never seated on the same bench. The algorithm calculates risk scores for each potential seat
+            assignment and optimizes accordingly.</p>
+          <p>Create a real-time monitoring dashboard for invigilators that provides live insights into seating
+            arrangements, student分布, and examination hall status. This enables quick decision-making during examination
+            emergencies.</p>
+          <p>Enable bulk student data upload with Excel file processing to streamline the onboarding process. The system
+            parses Excel files, validates data, and automatically classifies students by their respective classes.</p>
+          <p>Provide anti-cheat bench separation based on class constraints, ensuring that no two students from the same
+            class share a bench regardless of row placement.</p>
+        </div>
+
+        <br>
+
+        <div class="section">
+          <div class="arrow">Algorithm Theory</div>
+          <div class="highlight-box">
+            <div class="title">Risk Minimization Approach</div>
+            <p><strong>Constraint Satisfaction:</strong> The algorithm enforces the fundamental constraint that students
+              from the same class cannot be seated on the same bench. This is achieved through a hard constraint in the
+              allocation logic.</p>
+            <p><strong>Risk Scoring:</strong> Each potential seat assignment is assigned a risk score based on the
+              proximity of same-class students in surrounding seats. Lower scores indicate safer arrangements.</p>
+            <p><strong>Greedy Optimization:</strong> Seats are allocated iteratively, with each selection choosing the
+              lowest-risk available seat at that moment. This approach provides near-optimal solutions efficiently.</p>
+            <p><strong>Gap Pattern:</strong> Strategic gaps are inserted at regular intervals to break potential
+              communication chains between students from different but related classes.</p>
+          </div>
+        </div>
+
+        <br>
+
+        <div class="section">
+          <div class="arrow">Workflow</div>
+          <div class="box-row">
+            <div class="box">Data Input</div>
+            <span class="arrow-text">→</span>
+            <div class="box">Preprocess</div>
+            <span class="arrow-text">→</span>
+            <div class="box">Risk Matrix</div>
+          </div>
+          <div class="box-row">
+            <div class="box">Algorithm</div>
+            <span class="arrow-text">→</span>
+            <div class="box">Allocate</div>
+            <span class="arrow-text">→</span>
+            <div class="box">Export</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- RIGHT COLUMN -->
+      <div>
+
+        <div class="section">
+          <div class="arrow">Methodology</div>
+          <p><strong>Data Modeling:</strong> MongoDB is used with flexible schemas to store student records, classroom
+            configurations, and seating plans. The document-based model allows easy scaling and modification of data
+            structures.</p>
+          <p><strong>Preprocessing Pipeline:</strong> The system parses Excel files containing student data, validates
+            entries for completeness and correctness, and automatically extracts class information for categorization.
+          </p>
+          <p><strong>Risk Engine:</strong> A mathematical formulation calculates seating risk based on class adjacency.
+            The engine considers bench position, row distance, and class proximity to generate comprehensive risk
+            scores.</p>
+          <p><strong>Optimization:</strong> A greedy algorithm with backtracking iterates through students, placing each
+            in the lowest-risk available seat while maintaining all constraints. The approach balances optimality with
+            computational efficiency.</p>
+          <p><strong>Anti-Cheat Logic:</strong> The bench-level separation constraint ensures complete isolation of
+            same-class students. The algorithm validates each allocation against this hard constraint before
+            confirmation.</p>
+        </div>
+
+        <br>
+
+        <div class="section">
+          <div class="arrow">System Architecture</div>
+          <div class="box-row">
+            <div class="box">Flutter App</div>
+            <span class="arrow-text">→</span>
+            <div class="box">REST API</div>
+            <span class="arrow-text">→</span>
+            <div class="box">Node.js</div>
+            <span class="arrow-text">→</span>
+            <div class="box">MongoDB</div>
+          </div>
+          <div class="tech-stack">
+            <span class="tech-item">Express.js</span>
+            <span class="tech-item">Flutter</span>
+            <span class="tech-item">MongoDB</span>
+            <span class="tech-item">JWT Auth</span>
+            <span class="tech-item">Multer</span>
+            <span class="tech-item">Mongoose</span>
+          </div>
+        </div>
+
+        <br>
+
+        <div class="small-grid">
+
+          <div class="section">
+            <div class="arrow">Key Results</div>
+            <div class="metrics">
+              <div class="metric">
+                <div class="metric-value">70%</div>
+                <div class="metric-label">Faster Allocation</div>
+              </div>
+              <div class="metric">
+                <div class="metric-value">100%</div>
+                <div class="metric-label">Automated</div>
+              </div>
+              <div class="metric">
+                <div class="metric-value">0%</div>
+                <div class="metric-label">Same-Bench Risk</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="arrow">Limitations</div>
+            <p>The system requires structured data input in a specific format for processing. Excel files must follow
+              the defined template with proper column headers.</p>
+            <p>Currently operates in single exam hall mode, which may require duplication for multi-hall examinations.
+              Performance is hardware dependent on the server infrastructure.</p>
+          </div>
+
+        </div>
+
+        <br>
+
+        <div class="section">
+          <div class="arrow">Conclusion</div>
+          <p>This smart automated examination system significantly reduces manual workload by eliminating hours of
+            manual seating arrangement. The AI-driven risk minimization approach ensures fairness and academic integrity
+            throughout the examination process.</p>
+          <p>The scalable architecture is designed for future expansion to multi-hall deployment, supporting
+            institutions as they grow. The comprehensive audit trail provides examination transparency for
+            administrators and regulatory bodies.</p>
+          <p>By integrating modern web technologies with optimization algorithms, this system represents a significant
+            advancement in examination management, setting new standards for efficiency and fairness in academic
+            institutions.</p>
+        </div>
+
+        <br>
+
+        <div class="section">
+          <div class="arrow">Team Members</div>
+          <div class="highlight-box">
+            <div class="title">Project Developers</div>
+            <p><strong>Sarang S S </strong> </p>
+            <p><strong>Prakash Vaishnaw</strong> </p>
+            <p><strong>Sundaram Pandey</strong> </p>
+          </div>
+        </div>
+
+        <br>
+
+        <div class="section">
+          <div class="arrow">Project Guide</div>
+          <div class="highlight-box">
+            <div class="title">Under the guidance of</div>
+            <p><strong>Mr. Mankesh patil</strong></p>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- FOOTER -->
+    <div class="footer">
+      <div class="footer-text">
+        <span class="footer-highlight">Smart Exams</span> •
+        <span class="footer-highlight">Secure Future</span> •
+        AI-Powered Innovation •
+        ADYPU School of Engineering
+      </div>
+    </div>
+
+  </div>
+
+</body>
+
+</html>

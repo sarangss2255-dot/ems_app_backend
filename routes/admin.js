@@ -3,7 +3,23 @@ const router = express.Router();
 const multer = require("multer");
 const adminController = require("../controllers/adminController");
 const { authMiddleware, requireRole } = require("../middleware/auth");
-const upload = multer({ storage: multer.memoryStorage() });
+
+// Configure multer to accept only CSV and XLSX files
+const fileFilter = (req, file, cb) => {
+  const allowedExtensions = [".csv", ".xlsx", ".xls"];
+  const ext = file.originalname.toLowerCase().slice(file.originalname.lastIndexOf("."));
+  if (allowedExtensions.includes(ext)) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only CSV and XLSX files are allowed"), false);
+  }
+};
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+});
 
 router.post(
   "/classrooms",

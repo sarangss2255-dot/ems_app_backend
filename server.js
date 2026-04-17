@@ -9,6 +9,7 @@ const adminRoutes = require("./routes/admin");
 const teacherRoutes = require("./routes/teacher");
 const studentRoutes = require("./routes/student");
 const docsRoutes = require("./routes/docs");
+const profileRoutes = require("./routes/profile");
 
 const app = express();
 app.use(morgan("dev"));
@@ -33,6 +34,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/teacher", teacherRoutes);
 app.use("/api/student", studentRoutes);
+app.use("/api", profileRoutes);
 
 const PORT = process.env.PORT || 8000;
 

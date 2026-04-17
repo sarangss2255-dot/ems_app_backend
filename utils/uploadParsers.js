@@ -1,9 +1,6 @@
 const csv = require("csv-parser");
 const { Readable } = require("stream");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { execFile } = require("child_process");
+const XLSX = require("xlsx");
 
 function normalizeHeader(value) {
   return String(value || "")
@@ -39,146 +36,47 @@ function parseCsvBuffer(buffer) {
 }
 
 function parseSpreadsheetBuffer(buffer, fileName = "") {
-  const ext = path.extname(String(fileName || "")).toLowerCase();
-  if (ext === ".xlsx") return parseXlsxBuffer(buffer);
+  const ext = fileName.toLowerCase().split(".").pop();
+  if (ext === "xlsx") return parseXlsxBuffer(buffer);
   return parseCsvBuffer(buffer);
 }
 
 function parseXlsxBuffer(buffer) {
   return new Promise((resolve, reject) => {
-    const tempBase = path.join(os.tmpdir(), `exam_upload_${Date.now()}_${Math.random().toString(16).slice(2)}`);
-    const xlsxPath = `${tempBase}.xlsx`;
-    const scriptPath = `${tempBase}.ps1`;
-    fs.writeFileSync(xlsxPath, buffer);
+    try {
+      // Read the workbook from buffer
+      const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
 
-    const script = `
-param([string]$path)
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$zipRoot = Join-Path ([System.IO.Path]::GetDirectoryName($path)) ([System.IO.Path]::GetFileNameWithoutExtension($path) + "_unzipped")
-if (Test-Path $zipRoot) { Remove-Item -Recurse -Force $zipRoot }
-[System.IO.Compression.ZipFile]::ExtractToDirectory($path, $zipRoot)
-$shared = @()
-$sharedPath = Join-Path $zipRoot 'xl\\sharedStrings.xml'
-if (Test-Path $sharedPath) {
-  [xml]$sx = Get-Content -LiteralPath $sharedPath -Raw
-  foreach ($si in $sx.sst.si) {
-    if ($si.t) { $shared += [string]$si.t }
-    elseif ($si.r) { $shared += (($si.r | ForEach-Object { $_.t.'#text' }) -join '') }
-    else { $shared += '' }
-  }
-}
-[xml]$workbook = Get-Content -LiteralPath (Join-Path $zipRoot 'xl\\workbook.xml') -Raw
-[xml]$rels = Get-Content -LiteralPath (Join-Path $zipRoot 'xl\\_rels\\workbook.xml.rels') -Raw
-$sheet = $workbook.workbook.sheets.sheet | Select-Object -First 1
-$rid = $sheet.GetAttribute('id','http://schemas.openxmlformats.org/officeDocument/2006/relationships')
-$target = ($rels.Relationships.Relationship | Where-Object { $_.Id -eq $rid }).Target
-$sheetPath = Join-Path $zipRoot ('xl\\' + $target.Replace('/','\\'))
-[xml]$sheetXml = Get-Content -LiteralPath $sheetPath -Raw
-function Get-CellValue($cell) {
-  if (-not $cell) { return '' }
-  $type = $cell.t
-  $value = $cell.v
-  if ($null -eq $value) { return '' }
-  if ($type -eq 's') { return $shared[[int]$value] }
-  return [string]$value
-}
-$rows = @()
-foreach ($row in $sheetXml.worksheet.sheetData.row) {
-  $values = @()
-  foreach ($cell in $row.c) { $values += (Get-CellValue $cell) }
-  $rows += ,@($values)
-}
-$rows | ConvertTo-Json -Depth 6 -Compress
-Remove-Item -Force $path
-Remove-Item -Recurse -Force $zipRoot
-`;
-    fs.writeFileSync(scriptPath, script, "utf8");
-
-    const candidates = [
-      path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-      "powershell.exe",
-      "pwsh.exe"
-    ];
-
-    runPowerShellCandidate(candidates, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, xlsxPath], (error, stdout, stderr) => {
-      try {
-        if (fs.existsSync(xlsxPath)) fs.unlinkSync(xlsxPath);
-        if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
-      } catch (_) {}
-      if (error) {
-        const message = stderr ? `${error.message}: ${stderr}` : error.message;
-        return reject(new Error(`Failed to parse XLSX upload. ${message}`));
+      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+        return reject(new Error("XLSX file contains no sheets"));
       }
-      try {
-        const rows = JSON.parse(String(stdout || "[]"));
-        const arrayRows = normalizeWorksheetRows(rows);
-        if (!arrayRows.length) return resolve([]);
-        const headers = toValueArray(arrayRows[0]).map((header) => normalizeHeader(header));
-        const records = arrayRows.slice(1).map((values) => {
-          const row = {};
-          const valueArray = toValueArray(values);
-          headers.forEach((header, index) => {
-            row[header] = String(valueArray[index] ?? "").trim();
-          });
-          return row;
-        });
-        return resolve(records.filter((row) => Object.values(row).some(Boolean)));
-      } catch (parseError) {
-        return reject(parseError);
+
+      // Get the first sheet
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+
+      // Convert sheet to JSON array
+      const rawData = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+      if (!rawData.length) {
+        return resolve([]);
       }
-    });
+
+      // Normalize headers (convert to lowercase, remove special chars)
+      const records = rawData.map((row) => {
+        const normalizedRow = {};
+        for (const [key, value] of Object.entries(row)) {
+          normalizedRow[normalizeHeader(key)] = String(value ?? "").trim();
+        }
+        return normalizedRow;
+      });
+
+      // Filter out empty rows
+      return resolve(records.filter((row) => Object.values(row).some(Boolean)));
+    } catch (error) {
+      return reject(new Error(`Failed to parse XLSX upload. ${error.message}`));
+    }
   });
-}
-
-function runPowerShellCandidate(commands, args, done, index = 0) {
-  const command = commands[index];
-  if (!command) {
-    return done(new Error("No PowerShell runtime was available to process XLSX files"), "", "");
-  }
-
-  execFile(
-    command,
-    args,
-    { windowsHide: true, maxBuffer: 1024 * 1024 * 64, timeout: 120000 },
-    (error, stdout, stderr) => {
-      if (error && (error.code === "ENOENT" || error.code === "EPERM") && index < commands.length - 1) {
-        return runPowerShellCandidate(commands, args, done, index + 1);
-      }
-      return done(error, stdout, stderr);
-    }
-  );
-}
-
-function normalizeWorksheetRows(rows) {
-  if (Array.isArray(rows)) return rows;
-  if (!rows || typeof rows !== "object") return [];
-  return [rows];
-}
-
-function toValueArray(row) {
-  if (Array.isArray(row)) {
-    if (row.length === 1 && (Array.isArray(row[0]) || (row[0] && typeof row[0] === "object"))) {
-      return toValueArray(row[0]);
-    }
-    return row.map((value) => {
-      if (Array.isArray(value) && value.length === 1) return value[0];
-      if (value && typeof value === "object") {
-        const nested = toValueArray(value);
-        return nested.length === 1 ? nested[0] : nested.join(" ");
-      }
-      return value;
-    });
-  }
-  if (!row || typeof row !== "object") return [];
-  if ("value" in row) return toValueArray(row.value);
-  if ("Value" in row) return toValueArray(row.Value);
-  const numericKeys = Object.keys(row)
-    .filter((key) => /^\d+$/.test(key))
-    .sort((a, b) => Number(a) - Number(b));
-  if (numericKeys.length) {
-    return numericKeys.map((key) => row[key]);
-  }
-  return Object.values(row).flatMap((value) => toValueArray(value));
 }
 
 function pick(row, keys, fallback = "") {
