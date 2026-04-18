@@ -39,10 +39,32 @@ function parseCsvBuffer(buffer) {
   });
 }
 
+function parseCsvFile(filePath) {
+  return new Promise((resolve, reject) => {
+    const rows = [];
+    fs.createReadStream(filePath)
+      .pipe(
+        csv({
+          mapHeaders: ({ header }) => normalizeHeader(header),
+          mapValues: ({ value }) => String(value || "").trim()
+        })
+      )
+      .on("data", (row) => rows.push(row))
+      .on("end", () => resolve(rows))
+      .on("error", reject);
+  });
+}
+
 function parseSpreadsheetBuffer(buffer, fileName = "") {
   const ext = path.extname(String(fileName || "")).toLowerCase();
-  if (ext === ".xlsx") return parseXlsxBuffer(buffer);
+  if (ext === ".xlsx" || ext === ".xls") return parseXlsxBuffer(buffer);
   return parseCsvBuffer(buffer);
+}
+
+function parseSpreadsheetFile(filePath, fileName = "") {
+  const ext = path.extname(String(fileName || filePath || "")).toLowerCase();
+  if (ext === ".xlsx" || ext === ".xls") return parseXlsxFile(filePath);
+  return parseCsvFile(filePath);
 }
 
 function parseXlsxBuffer(buffer) {
@@ -79,6 +101,42 @@ function parseXlsxBuffer(buffer) {
       return resolve(records.filter((row) => Object.values(row).some(Boolean)));
     } catch (error) {
       return parseXlsxBufferFallback(buffer)
+        .then(resolve)
+        .catch((fallbackError) => reject(new Error(`Failed to parse XLSX upload. ${fallbackError.message}`)));
+    }
+  });
+}
+
+function parseXlsxFile(filePath) {
+  return new Promise((resolve, reject) => {
+    try {
+      const workbook = XLSX.readFile(filePath, { cellDates: true });
+
+      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+        return reject(new Error("XLSX file contains no sheets"));
+      }
+
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rawData = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+      if (!rawData.length) {
+        return resolve([]);
+      }
+
+      const records = rawData.map((row) => {
+        const normalizedRow = {};
+        for (const [key, value] of Object.entries(row)) {
+          normalizedRow[normalizeHeader(key)] = String(value ?? "").trim();
+        }
+        return normalizedRow;
+      });
+
+      return resolve(records.filter((row) => Object.values(row).some(Boolean)));
+    } catch (error) {
+      return fs.promises
+        .readFile(filePath)
+        .then((buffer) => parseXlsxBufferFallback(buffer))
         .then(resolve)
         .catch((fallbackError) => reject(new Error(`Failed to parse XLSX upload. ${fallbackError.message}`)));
     }
@@ -288,7 +346,9 @@ function mapClassroomRow(row) {
 
 module.exports = {
   parseCsvBuffer,
+  parseCsvFile,
   parseSpreadsheetBuffer,
+  parseSpreadsheetFile,
   mapStudentRow,
   mapClassroomRow,
   mapTeacherRow

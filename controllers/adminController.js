@@ -4,8 +4,9 @@ const User = require("../models/user");
 const Attendance = require("../models/Attendance");
 const CheatingIncident = require("../models/CheatingIncident");
 const { generateSeating, moveStudent, normalizeStoredSeating, seatingToCsv } = require("../utils/seating");
+const fs = require("fs");
 const mongoose = require("mongoose");
-const { parseSpreadsheetBuffer, mapStudentRow, mapClassroomRow, mapTeacherRow } = require("../utils/uploadParsers");
+const { parseSpreadsheetBuffer, parseSpreadsheetFile, mapStudentRow, mapClassroomRow, mapTeacherRow } = require("../utils/uploadParsers");
 const { getAppSettings } = require("../config/appSettings");
 
 async function createClassroom(req, res) {
@@ -229,43 +230,53 @@ async function bulkCreateStudents(req, res) {
 
 async function uploadStudents(req, res) {
   try {
-    if (!req.file?.buffer) return res.status(400).json({ error: "Spreadsheet file required" });
+    if (!req.file) return res.status(400).json({ error: "Spreadsheet file required" });
 
-    const rows = await parseSpreadsheetBuffer(req.file.buffer, req.file.originalname);
+    const rows = await getSpreadsheetRowsFromUpload(req.file);
     if (!rows.length) return res.status(400).json({ error: "Uploaded sheet is empty" });
 
-    let created = 0;
+    const mappedRows = rows.map(mapStudentRow);
+    const usernames = mappedRows.map((student) => student.username).filter(Boolean);
+    const existingUsernames = await getExistingUsernames(usernames);
+
+    const seenInFile = new Set();
+    const studentsToCreate = [];
     let skipped = 0;
 
-    for (const row of rows) {
-      const student = mapStudentRow(row);
+    for (const student of mappedRows) {
       if (!student.username) {
         skipped += 1;
         continue;
       }
 
-      const exists = await User.findOne({ username: student.username }).lean();
-      if (exists) {
+      if (existingUsernames.has(student.username) || seenInFile.has(student.username)) {
         skipped += 1;
         continue;
       }
 
-      const hashed = await bcrypt.hash(student.password || "pass123", 10);
-      await User.create({
+      seenInFile.add(student.username);
+      studentsToCreate.push(student);
+    }
+
+    const createdDocs = await Promise.all(
+      studentsToCreate.map(async (student) => ({
         username: student.username,
-        password: hashed,
+        password: await bcrypt.hash(student.password || "pass123", 10),
         initialPassword: student.password || "pass123",
         fullName: student.fullName,
         role: "student",
         rollNumber: student.rollNumber,
         className: student.className
-      });
-      created += 1;
+      }))
+    );
+
+    if (createdDocs.length) {
+      await User.insertMany(createdDocs, { ordered: false });
     }
 
     return res.json({
       ok: true,
-      imported: created,
+      imported: createdDocs.length,
       skipped,
       expectedColumns: ["URN", "Student Name", "Sr. No", "Year", "Program", "Specialization"]
     });
@@ -276,24 +287,25 @@ async function uploadStudents(req, res) {
 
 async function previewStudentsUpload(req, res) {
   try {
-    if (!req.file?.buffer) return res.status(400).json({ error: "Spreadsheet file required" });
+    if (!req.file) return res.status(400).json({ error: "Spreadsheet file required" });
 
-    const rows = await parseSpreadsheetBuffer(req.file.buffer, req.file.originalname);
+    const rows = await getSpreadsheetRowsFromUpload(req.file);
     if (!rows.length) return res.status(400).json({ error: "Uploaded sheet is empty" });
 
+    const mappedRows = rows.map(mapStudentRow);
+    const existingUsernames = await getExistingUsernames(mappedRows.map((student) => student.username).filter(Boolean));
     const preview = [];
     let valid = 0;
     let missingIdentity = 0;
     let duplicatesInDatabase = 0;
 
-    for (let index = 0; index < rows.length; index++) {
-      const student = mapStudentRow(rows[index]);
+    for (let index = 0; index < mappedRows.length; index++) {
+      const student = mappedRows[index];
       if (!student.username) {
         missingIdentity += 1;
       } else {
         valid += 1;
-        const exists = await User.findOne({ username: student.username }).select("_id").lean();
-        if (exists) duplicatesInDatabase += 1;
+        if (existingUsernames.has(student.username)) duplicatesInDatabase += 1;
       }
 
       if (preview.length < 20) {
@@ -324,60 +336,100 @@ async function previewStudentsUpload(req, res) {
 
 async function uploadTeachers(req, res) {
   try {
-    if (!req.file?.buffer) return res.status(400).json({ error: "Spreadsheet file required" });
+    if (!req.file) return res.status(400).json({ error: "Spreadsheet file required" });
 
-    const rows = await parseSpreadsheetBuffer(req.file.buffer, req.file.originalname);
+    const rows = await getSpreadsheetRowsFromUpload(req.file);
     if (!rows.length) return res.status(400).json({ error: "Uploaded sheet is empty" });
 
-    let created = 0;
+    const mappedRows = rows.map(mapTeacherRow);
+    const usernames = mappedRows.map((teacher) => teacher.username).filter(Boolean);
+    const existingUsernames = await getExistingUsernames(usernames);
+    const classroomNames = mappedRows.map((teacher) => teacher.assignedClassroomName).filter(Boolean);
+    const classrooms = classroomNames.length
+      ? await Classroom.find({ name: { $in: Array.from(new Set(classroomNames)) } })
+          .select("_id name")
+          .lean()
+      : [];
+    const classroomByName = new Map(classrooms.map((classroom) => [classroom.name, classroom]));
+
+    const seenInFile = new Set();
+    const teachersToCreate = [];
     let skipped = 0;
-    let autoAssigned = 0;
     let explicitAssigned = 0;
 
-    for (const row of rows) {
-      const teacherRow = mapTeacherRow(row);
+    for (const teacherRow of mappedRows) {
       if (!teacherRow.username) {
         skipped += 1;
         continue;
       }
 
-      const exists = await User.findOne({ username: teacherRow.username }).lean();
-      if (exists) {
+      if (existingUsernames.has(teacherRow.username) || seenInFile.has(teacherRow.username)) {
         skipped += 1;
         continue;
       }
 
-      const hashed = await bcrypt.hash(teacherRow.password || "pass123", 10);
-      const teacher = await User.create({
+      seenInFile.add(teacherRow.username);
+
+      const explicitClassroom = teacherRow.assignedClassroomName
+        ? classroomByName.get(teacherRow.assignedClassroomName)
+        : null;
+      if (explicitClassroom) explicitAssigned += 1;
+
+      teachersToCreate.push({
+        ...teacherRow,
+        explicitClassroomId: explicitClassroom?._id || null
+      });
+    }
+
+    const createdDocs = await Promise.all(
+      teachersToCreate.map(async (teacherRow) => ({
         username: teacherRow.username,
-        password: hashed,
+        password: await bcrypt.hash(teacherRow.password || "pass123", 10),
         initialPassword: teacherRow.password || "pass123",
         fullName: teacherRow.fullName,
-        role: "teacher"
-      });
+        role: "teacher",
+        assignedClassroom: teacherRow.explicitClassroomId
+      }))
+    );
 
-      let assignmentApplied = false;
-      if (teacherRow.assignedClassroomName) {
-        const classroom = await Classroom.findOne({ name: teacherRow.assignedClassroomName }).lean();
-        if (classroom) {
-          teacher.assignedClassroom = classroom._id;
-          await teacher.save();
-          explicitAssigned += 1;
-          assignmentApplied = true;
-        }
+    const insertedTeachers = createdDocs.length ? await User.insertMany(createdDocs, { ordered: false }) : [];
+
+    let autoAssigned = 0;
+    const autoAssignableTeachers = insertedTeachers.filter((teacher, index) => {
+      const source = teachersToCreate[index];
+      return !source.explicitClassroomId && source.autoAssign;
+    });
+
+    if (autoAssignableTeachers.length) {
+      const staffedClassroomIds = await User.find({
+        role: "teacher",
+        assignedClassroom: { $ne: null }
+      }).distinct("assignedClassroom");
+      const openClassrooms = await Classroom.find({
+        _id: { $nin: staffedClassroomIds }
+      })
+        .sort({ createdAt: 1, name: 1 })
+        .select("_id")
+        .lean();
+
+      const assignments = autoAssignableTeachers
+        .slice(0, openClassrooms.length)
+        .map((teacher, index) => ({
+          updateOne: {
+            filter: { _id: teacher._id },
+            update: { $set: { assignedClassroom: openClassrooms[index]._id } }
+          }
+        }));
+
+      if (assignments.length) {
+        await User.bulkWrite(assignments, { ordered: false });
+        autoAssigned = assignments.length;
       }
-
-      if (!assignmentApplied && teacherRow.autoAssign) {
-        const assigned = await autoAssignSpecificTeacher(teacher._id);
-        if (assigned) autoAssigned += 1;
-      }
-
-      created += 1;
     }
 
     return res.json({
       ok: true,
-      imported: created,
+      imported: insertedTeachers.length,
       skipped,
       autoAssigned,
       explicitAssigned,
@@ -390,43 +442,68 @@ async function uploadTeachers(req, res) {
 
 async function uploadClassrooms(req, res) {
   try {
-    if (!req.file?.buffer) return res.status(400).json({ error: "Spreadsheet file required" });
+    if (!req.file) return res.status(400).json({ error: "Spreadsheet file required" });
 
-    const rows = await parseSpreadsheetBuffer(req.file.buffer, req.file.originalname);
+    const rows = await getSpreadsheetRowsFromUpload(req.file);
     if (!rows.length) return res.status(400).json({ error: "Uploaded sheet is empty" });
 
-    let created = 0;
-    let updated = 0;
+    const mappedRows = rows.map(mapClassroomRow);
+    const payloads = [];
+    const seenNames = new Set();
     let skipped = 0;
 
-    for (const row of rows) {
+    for (const row of mappedRows) {
       try {
-        const payload = sanitizeClassroomPayload(mapClassroomRow(row));
-        const existing = await Classroom.findOne({ name: payload.name });
-        if (!existing) {
-          await Classroom.create(payload);
-          created += 1;
+        const payload = sanitizeClassroomPayload(row);
+        if (seenNames.has(payload.name)) {
+          skipped += 1;
           continue;
         }
-
-        existing.rows = payload.rows;
-        existing.benchesPerRow = payload.benchesPerRow;
-        existing.seatsPerBench = payload.seatsPerBench;
-        existing.capacity = payload.capacity;
-        existing.pattern = payload.pattern;
-        existing.gap = payload.gap;
-        existing.classesAllowed = payload.classesAllowed;
-        await existing.save();
-        updated += 1;
+        seenNames.add(payload.name);
+        payloads.push(payload);
       } catch (err) {
         skipped += 1;
       }
     }
 
+    const existingClassrooms = payloads.length
+      ? await Classroom.find({ name: { $in: Array.from(new Set(payloads.map((payload) => payload.name))) } })
+          .select("_id name")
+          .lean()
+      : [];
+    const existingNames = new Set(existingClassrooms.map((classroom) => classroom.name));
+
+    const createPayloads = payloads.filter((payload) => !existingNames.has(payload.name));
+    const updateOps = payloads
+      .filter((payload) => existingNames.has(payload.name))
+      .map((payload) => ({
+        updateOne: {
+          filter: { name: payload.name },
+          update: {
+            $set: {
+              rows: payload.rows,
+              benchesPerRow: payload.benchesPerRow,
+              seatsPerBench: payload.seatsPerBench,
+              capacity: payload.capacity,
+              pattern: payload.pattern,
+              gap: payload.gap,
+              classesAllowed: payload.classesAllowed
+            }
+          }
+        }
+      }));
+
+    if (createPayloads.length) {
+      await Classroom.insertMany(createPayloads, { ordered: false });
+    }
+    if (updateOps.length) {
+      await Classroom.bulkWrite(updateOps, { ordered: false });
+    }
+
     return res.json({
       ok: true,
-      created,
-      updated,
+      created: createPayloads.length,
+      updated: updateOps.length,
       skipped,
       expectedColumns: ["name", "rows", "benchesPerRow", "seatsPerBench", "capacity", "pattern", "gap"]
     });
@@ -642,6 +719,34 @@ function escapeCsv(value) {
   const text = String(value ?? "");
   if (!/[",\n]/.test(text)) return text;
   return `"${text.replaceAll('"', '""')}"`;
+}
+
+async function getExistingUsernames(usernames) {
+  const uniqueUsernames = Array.from(new Set(usernames.filter(Boolean)));
+  if (!uniqueUsernames.length) return new Set();
+
+  const existingUsers = await User.find({ username: { $in: uniqueUsernames } })
+    .select("username")
+    .lean();
+  return new Set(existingUsers.map((user) => user.username));
+}
+
+async function getSpreadsheetRowsFromUpload(file) {
+  try {
+    if (file.buffer) {
+      return await parseSpreadsheetBuffer(file.buffer, file.originalname);
+    }
+    if (file.path) {
+      return await parseSpreadsheetFile(file.path, file.originalname);
+    }
+    throw new Error("Spreadsheet file required");
+  } finally {
+    if (file?.path) {
+      try {
+        fs.unlinkSync(file.path);
+      } catch (_) {}
+    }
+  }
 }
 
 module.exports = {

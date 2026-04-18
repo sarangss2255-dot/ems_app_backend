@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
 const adminController = require("../controllers/adminController");
 const { authMiddleware, requireRole } = require("../middleware/auth");
 
@@ -15,8 +17,20 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
+const uploadTempDir = path.join(__dirname, "..", "tmp_uploads");
+
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      fs.mkdirSync(uploadTempDir, { recursive: true });
+      cb(null, uploadTempDir);
+    },
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname || "");
+      const base = path.basename(file.originalname || "upload", ext).replace(/[^a-z0-9_-]+/gi, "_");
+      cb(null, `${Date.now()}_${Math.random().toString(16).slice(2)}_${base}${ext}`);
+    }
+  }),
   fileFilter,
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
