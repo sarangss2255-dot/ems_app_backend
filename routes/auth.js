@@ -41,7 +41,7 @@ function rateLimit(req, res, next) {
   next();
 }
 
-router.post("/register", rateLimit, register);
-router.post("/login", rateLimit, login);
+router.post("/register", register);
+router.post("/login", login);
 
 module.exports = router;
