@@ -625,6 +625,15 @@ async function assignTeacher(req, res) {
     const teacher = await User.findById(teacherId);
     if (!teacher || teacher.role !== "teacher") return res.status(400).json({ error: "Invalid teacher" });
 
+    await User.updateMany(
+      {
+        role: "teacher",
+        assignedClassroom: classroom._id,
+        _id: { $ne: teacher._id }
+      },
+      { $set: { assignedClassroom: null } }
+    );
+
     teacher.assignedClassroom = classroom._id;
     await teacher.save();
     return res.json({
