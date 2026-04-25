@@ -44,7 +44,7 @@ function buildMlSeatingContext(students, metrics = {}, options = {}) {
   const studentRiskById = model?.studentRiskById || buildFallbackRiskById(dataset);
   return {
     kind: model ? "trained-ml" : "fallback-heuristic",
-    sameClassBenchPenalty: 120,
+    sameClassBenchPenalty: 1000,
     sameStreamBenchPenalty: 80,
     nearbySameClassPenalty: 1.2,
     nearbySameStreamPenalty: 0.95,

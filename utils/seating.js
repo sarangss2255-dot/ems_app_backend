@@ -68,6 +68,7 @@ function generateSeating(classroom, students, options = {}) {
     seating,
     report: {
       model: "reinforcement-guided-seat-policy-v1",
+      strictSameClassBenchSeparation: true,
       placed: placedSeats.length,
       requested: totalStudents,
       maxCapacity: capacity,
@@ -113,6 +114,7 @@ function generateGreedySeating(rows, benchesPerRow, seatsPerBench, capacity, tot
     seating,
     report: {
       model: "hard-bench-separation-v2",
+      strictSameClassBenchSeparation: true,
       placed: placedSeats.length,
       requested: totalStudents,
       maxCapacity: capacity,
@@ -158,6 +160,7 @@ function generateModelGuidedSeating(rows, benchesPerRow, seatsPerBench, capacity
     seating,
     report: {
       model: "trained-logistic-student-risk-v1",
+      strictSameClassBenchSeparation: true,
       placed: placedSeats.length,
       requested: totalStudents,
       maxCapacity: capacity,
@@ -246,19 +249,15 @@ function createEmptySeating(rows, benchesPerRow, seatsPerBench) {
 function pickReinforcementCandidate(pool, row, bench, seat, seating, placedSeats, featureMap, qTable, config) {
   if (!pool.length) return null;
 
-  const benchOccupants = (seating[row]?.[bench] || []).filter(Boolean);
-  const classSafeCandidates = pool.filter(
-    (student) => !benchOccupants.some((peer) => peer.className && peer.className === student.className)
-  );
-  const streamSafeCandidates = pool.filter(
+  const benchOccupants = getBenchOccupants(seating, row, bench);
+  const classSafeCandidates = pool.filter((student) => canSeatStudentInBench(student, benchOccupants));
+  const streamSafeCandidates = classSafeCandidates.filter(
     (student) => !benchOccupants.some((peer) => sameAcademicStream(peer, student))
   );
-  const candidatePool = streamSafeCandidates.length
-    ? streamSafeCandidates
-    : classSafeCandidates.length
-        ? classSafeCandidates
-        : pool;
+  const candidatePool = streamSafeCandidates.length ? streamSafeCandidates : classSafeCandidates;
   const seatKey = seatStateKey(row, bench, seat);
+
+  if (!candidatePool.length) return null;
 
   let bestCandidate = null;
   let bestPolicyScore = Number.POSITIVE_INFINITY;
@@ -294,18 +293,14 @@ function pickReinforcementCandidate(pool, row, bench, seat, seating, placedSeats
 function pickGreedyCandidate(pool, row, bench, seat, seating, placedSeats, featureMap) {
   if (!pool.length) return null;
 
-  const benchOccupants = (seating[row]?.[bench] || []).filter(Boolean);
-  const classSafeCandidates = pool.filter(
-    (student) => !benchOccupants.some((peer) => peer.className && peer.className === student.className)
-  );
-  const streamSafeCandidates = pool.filter(
+  const benchOccupants = getBenchOccupants(seating, row, bench);
+  const classSafeCandidates = pool.filter((student) => canSeatStudentInBench(student, benchOccupants));
+  const streamSafeCandidates = classSafeCandidates.filter(
     (student) => !benchOccupants.some((peer) => sameAcademicStream(peer, student))
   );
-  const candidatePool = streamSafeCandidates.length
-    ? streamSafeCandidates
-    : classSafeCandidates.length
-        ? classSafeCandidates
-        : pool;
+  const candidatePool = streamSafeCandidates.length ? streamSafeCandidates : classSafeCandidates;
+
+  if (!candidatePool.length) return null;
 
   let bestStudent = null;
   let bestScore = Number.POSITIVE_INFINITY;
@@ -518,6 +513,22 @@ function moveStudent(seatingInput, studentId, targetPosition) {
   if (!target) throw new Error("Target seat is out of range");
 
   const movedStudent = current.student;
+  const targetBenchOccupants = getBenchOccupants(seating, target.row - 1, target.bench - 1).filter(
+    (peer) => String(peer._id || peer.id) !== String(target.student?._id || target.student?.id)
+  );
+  if (!canSeatStudentInBench(movedStudent, targetBenchOccupants)) {
+    throw new Error("Cannot place students from the same class on the same bench");
+  }
+
+  if (target.student) {
+    const currentBenchOccupants = getBenchOccupants(seating, current.row - 1, current.bench - 1).filter(
+      (peer) => String(peer._id || peer.id) !== String(movedStudent._id || movedStudent.id)
+    );
+    if (!canSeatStudentInBench(target.student, currentBenchOccupants)) {
+      throw new Error("Move would place students from the same class on the same bench");
+    }
+  }
+
   seating[current.row - 1][current.bench - 1][current.seat - 1] = target.student || null;
   seating[target.row - 1][target.bench - 1][target.seat - 1] = movedStudent;
 
@@ -577,6 +588,17 @@ function escapeCsv(value) {
 function average(values) {
   if (!values.length) return 0;
   return round(values.reduce((a, b) => a + b, 0) / values.length);
+}
+
+function getBenchOccupants(seating, row, bench) {
+  return (seating[row]?.[bench] || []).filter(Boolean);
+}
+
+function canSeatStudentInBench(student, benchOccupants) {
+  if (!student) return false;
+  return !benchOccupants.some(
+    (peer) => peer.className && student.className && peer.className === student.className
+  );
 }
 
 function round(value) {
