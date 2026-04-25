@@ -10,6 +10,7 @@ const teacherRoutes = require("./routes/teacher");
 const studentRoutes = require("./routes/student");
 const docsRoutes = require("./routes/docs");
 const profileRoutes = require("./routes/profile");
+const timetableRoutes = require("./routes/timetable");
 
 const app = express();
 app.use(morgan("dev"));
@@ -35,6 +36,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/teacher", teacherRoutes);
 app.use("/api/student", studentRoutes);
 app.use("/api", profileRoutes);
+app.use("/api/timetable", timetableRoutes);
 
 const PORT = process.env.PORT || 8000;
 

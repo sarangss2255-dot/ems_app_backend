@@ -128,8 +128,38 @@ async function generateSeatingForClassroom(req, res) {
     const classroom = await Classroom.findById(req.params.id);
     if (!classroom) return res.status(404).json({ error: "Classroom not found" });
 
-    const generated = await generateAndPersistSeating(classroom, "generated-by-admin");
+    const examClasses = extractExamClasses(req.body, classroom.classesAllowed);
+    if (!examClasses.length) {
+      return res.status(400).json({ error: "Select at least one class that currently has an exam" });
+    }
+
+    const generated = await generateAndPersistSeating(
+      classroom,
+      "generated-by-admin",
+      examClasses,
+      resolveSeatingStrategy(req.body)
+    );
     return res.json(generated);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+async function getSeatingForClassroom(req, res) {
+  try {
+    const classroom = await Classroom.findById(req.params.id).lean();
+    if (!classroom) return res.status(404).json({ error: "Classroom not found" });
+
+    return res.json({
+      classroom: classroom.name,
+      allowedClasses: Array.isArray(classroom.classesAllowed) ? classroom.classesAllowed : [],
+      activeExamClasses: Array.isArray(classroom.activeExamClasses) ? classroom.activeExamClasses : [],
+      seating: normalizeStoredSeating(classroom.seatingPlan),
+      antiCheat: classroom.antiCheatReport || null,
+      seatingGeneratedAt: classroom.seatingGeneratedAt,
+      seatingVersion: classroom.seatingVersion || 0,
+      lastSeatingAction: classroom.lastSeatingAction || ""
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -139,8 +169,21 @@ async function reshuffleSeatingForClassroom(req, res) {
   try {
     const classroom = await Classroom.findById(req.params.id);
     if (!classroom) return res.status(404).json({ error: "Classroom not found" });
+    if (!Array.isArray(classroom.seatingPlan) || !classroom.seatingPlan.length) {
+      return res.status(400).json({ error: "Generate seating first" });
+    }
 
-    const generated = await generateAndPersistSeating(classroom, "reshuffled-by-admin");
+    const examClasses = extractExamClasses(req.body, classroom.classesAllowed);
+    if (!examClasses.length) {
+      return res.status(400).json({ error: "Select at least one class that currently has an exam" });
+    }
+
+    const generated = await generateAndPersistSeating(
+      classroom,
+      "reshuffled-by-admin",
+      examClasses,
+      resolveSeatingStrategy(req.body)
+    );
     return res.json({ ...generated, message: "Seating reshuffled" });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -152,7 +195,7 @@ async function moveSeatForClassroom(req, res) {
     const classroom = await Classroom.findById(req.params.id);
     if (!classroom) return res.status(404).json({ error: "Classroom not found" });
     if (!Array.isArray(classroom.seatingPlan) || !classroom.seatingPlan.length) {
-      await generateAndPersistSeating(classroom, "generated-before-admin-seat-change");
+      return res.status(400).json({ error: "Generate seating first" });
     }
 
     const { studentId, row, bench, seat } = req.body || {};
@@ -185,7 +228,7 @@ async function exportSeatingCsv(req, res) {
     const classroom = await Classroom.findById(req.params.id);
     if (!classroom) return res.status(404).json({ error: "Classroom not found" });
     if (!Array.isArray(classroom.seatingPlan) || !classroom.seatingPlan.length) {
-      await generateAndPersistSeating(classroom, "generated-before-export");
+      return res.status(400).json({ error: "Generate seating first" });
     }
 
     const csv = seatingToCsv(classroom.name, normalizeStoredSeating(classroom.seatingPlan));
@@ -193,6 +236,35 @@ async function exportSeatingCsv(req, res) {
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
     return res.send(csv);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+async function clearSeatingForClassroom(req, res) {
+  try {
+    const classroom = await Classroom.findById(req.params.id);
+    if (!classroom) return res.status(404).json({ error: "Classroom not found" });
+
+    classroom.seatingPlan = [];
+    classroom.activeExamClasses = [];
+    classroom.antiCheatReport = null;
+    classroom.seatingGeneratedAt = null;
+    classroom.seatingVersion = 0;
+    classroom.lastSeatingAction = "cleared-by-admin";
+    await classroom.save();
+
+    return res.json({
+      ok: true,
+      classroom: classroom.name,
+      allowedClasses: Array.isArray(classroom.classesAllowed) ? classroom.classesAllowed : [],
+      activeExamClasses: [],
+      seating: [],
+      antiCheat: null,
+      seatingGeneratedAt: null,
+      seatingVersion: 0,
+      lastSeatingAction: classroom.lastSeatingAction
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -591,13 +663,11 @@ async function buildStudentMetrics(studentIds) {
   return { absencesByStudentId, incidentsByStudentId };
 }
 
-async function generateAndPersistSeating(classroom, actionLabel) {
+async function generateAndPersistSeating(classroom, actionLabel, examClasses, seatingStrategyOverride = "") {
   const students = await User.find({
     role: "student",
     className:
-      Array.isArray(classroom.classesAllowed) && classroom.classesAllowed.length
-        ? { $in: classroom.classesAllowed }
-        : { $exists: true, $ne: null }
+      examClasses.length ? { $in: examClasses } : { $exists: true, $ne: null }
   })
     .sort({ className: 1, rollNumber: 1 })
     .lean();
@@ -605,10 +675,11 @@ async function generateAndPersistSeating(classroom, actionLabel) {
   const metrics = await buildStudentMetrics(students.map((s) => s._id));
   const result = generateSeating(classroom, students, {
     metrics,
-    seatingStrategy: getAppSettings().seatingStrategy
+    seatingStrategy: seatingStrategyOverride || getAppSettings().seatingStrategy
   });
 
   classroom.seatingPlan = result.seating;
+  classroom.activeExamClasses = examClasses;
   classroom.antiCheatReport = result.report;
   classroom.seatingGeneratedAt = new Date();
   classroom.seatingVersion = Number(classroom.seatingVersion || 0) + 1;
@@ -617,12 +688,38 @@ async function generateAndPersistSeating(classroom, actionLabel) {
 
   return {
     classroom: classroom.name,
+    allowedClasses: Array.isArray(classroom.classesAllowed) ? classroom.classesAllowed : [],
+    activeExamClasses: examClasses,
     seating: classroom.seatingPlan,
     antiCheat: classroom.antiCheatReport,
     seatingGeneratedAt: classroom.seatingGeneratedAt,
     seatingVersion: classroom.seatingVersion,
     lastSeatingAction: classroom.lastSeatingAction
   };
+}
+
+function resolveSeatingStrategy(body = {}) {
+  const requested = String(body.seatingStrategy || "").trim().toLowerCase();
+  if (["trained-ml", "reinforcement-guided", "greedy"].includes(requested)) {
+    return requested;
+  }
+  return "";
+}
+
+function extractExamClasses(body = {}, allowedClasses = []) {
+  const requestedClasses = Array.isArray(body.examClasses)
+    ? body.examClasses.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  if (!requestedClasses.length) return [];
+
+  const normalizedAllowed = Array.isArray(allowedClasses)
+    ? allowedClasses.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  if (!normalizedAllowed.length) return Array.from(new Set(requestedClasses));
+
+  const allowedSet = new Set(normalizedAllowed);
+  const filtered = requestedClasses.filter((item) => allowedSet.has(item));
+  return Array.from(new Set(filtered));
 }
 
 async function autoAssignTeacherToClassroom(classroomId) {
@@ -752,12 +849,14 @@ async function getSpreadsheetRowsFromUpload(file) {
 module.exports = {
   assignTeacher,
   bulkCreateStudents,
+  clearSeatingForClassroom,
   createClassroom,
   deleteClassroom,
   deleteStudent,
   exportSeatingCsv,
   exportStudentCredentials,
   generateSeatingForClassroom,
+  getSeatingForClassroom,
   getClassroomById,
   listClassrooms,
   listStudents,

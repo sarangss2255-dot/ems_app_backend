@@ -71,6 +71,13 @@ router.delete(
 );
 
 router.get(
+  "/classrooms/:id/seating",
+  authMiddleware,
+  requireRole("admin"),
+  adminController.getSeatingForClassroom
+);
+
+router.post(
   "/classrooms/:id/generate",
   authMiddleware,
   requireRole("admin"),
@@ -82,6 +89,13 @@ router.post(
   authMiddleware,
   requireRole("admin"),
   adminController.reshuffleSeatingForClassroom
+);
+
+router.delete(
+  "/classrooms/:id/seating",
+  authMiddleware,
+  requireRole("admin"),
+  adminController.clearSeatingForClassroom
 );
 
 router.post(

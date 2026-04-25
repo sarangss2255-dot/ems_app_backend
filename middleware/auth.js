@@ -1,7 +1,10 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/user");
 require("dotenv").config();
-const JWT_SECRET = process.env.JWT_SECRET || "change_this";
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET environment variable is required");
+}
 
 async function authMiddleware(req, res, next) {
   const auth = req.headers.authorization;

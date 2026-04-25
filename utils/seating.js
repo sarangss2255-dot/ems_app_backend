@@ -1,4 +1,6 @@
 const { buildStudentFeatureMap, pairRiskScore } = require("./antiCheat");
+const { buildMlSeatingContext } = require("./mlSeatModel");
+const { sameAcademicStream } = require("./academicGrouping");
 
 function generateSeating(classroom, students, options = {}) {
   const rows = Number(classroom.rows || 0);
@@ -9,9 +11,31 @@ function generateSeating(classroom, students, options = {}) {
   const basePool = students.slice(0, capacity);
   const featureMap = buildStudentFeatureMap(basePool, options.metrics || {});
   const selectedStrategy = String(options.seatingStrategy || "reinforcement-guided").toLowerCase();
+  const heuristicScoring = createHeuristicScoringContext(featureMap);
+
+  if (selectedStrategy === "trained-ml") {
+    const mlContext = buildMlSeatingContext(basePool, options.metrics || {}, options.trainingOptions || {});
+    return generateModelGuidedSeating(
+      rows,
+      benchesPerRow,
+      seatsPerBench,
+      capacity,
+      totalStudents,
+      basePool,
+      mlContext
+    );
+  }
 
   if (selectedStrategy === "greedy") {
-    return generateGreedySeating(rows, benchesPerRow, seatsPerBench, capacity, totalStudents, basePool, featureMap);
+    return generateGreedySeating(
+      rows,
+      benchesPerRow,
+      seatsPerBench,
+      capacity,
+      totalStudents,
+      basePool,
+      heuristicScoring
+    );
   }
 
   const episodeCount = Math.max(4, Math.min(Number(options.rlEpisodes || 12), 30));
@@ -26,7 +50,7 @@ function generateSeating(classroom, students, options = {}) {
       benchesPerRow,
       seatsPerBench,
       basePool,
-      featureMap,
+      heuristicScoring,
       qTable,
       { epsilon, alpha }
     );
@@ -38,6 +62,7 @@ function generateSeating(classroom, students, options = {}) {
   const seating = bestResult?.seating || createEmptySeating(rows, benchesPerRow, seatsPerBench);
   const placedSeats = bestResult?.placedSeats || [];
   const benchViolations = bestResult?.benchViolations || [];
+  const violationSummary = summarizeBenchViolations(benchViolations);
 
   return {
     seating,
@@ -48,7 +73,9 @@ function generateSeating(classroom, students, options = {}) {
       maxCapacity: capacity,
       unseated: Math.max(totalStudents - capacity, 0),
       averagePairRisk: bestResult ? round(bestResult.averageRisk) : average(placedSeats.map((x) => x.risk)),
-      sameClassBenchViolations: benchViolations.length,
+      sameClassBenchViolations: violationSummary.sameClassCount,
+      sameStreamBenchViolations: violationSummary.sameStreamCount,
+      totalBenchViolations: violationSummary.totalCount,
       benchViolations,
       reinforcementLearning: {
         strategy: "epsilon-greedy contextual seat policy",
@@ -81,6 +108,7 @@ function generateGreedySeating(rows, benchesPerRow, seatsPerBench, capacity, tot
   }
 
   const benchViolations = collectBenchViolations(seating);
+  const violationSummary = summarizeBenchViolations(benchViolations);
   return {
     seating,
     report: {
@@ -90,13 +118,65 @@ function generateGreedySeating(rows, benchesPerRow, seatsPerBench, capacity, tot
       maxCapacity: capacity,
       unseated: Math.max(totalStudents - capacity, 0),
       averagePairRisk: average(placedSeats.map((x) => x.risk)),
-      sameClassBenchViolations: benchViolations.length,
+      sameClassBenchViolations: violationSummary.sameClassCount,
+      sameStreamBenchViolations: violationSummary.sameStreamCount,
+      totalBenchViolations: violationSummary.totalCount,
       benchViolations,
       reinforcementLearning: {
         strategy: "disabled",
         episodes: 0,
         exploredStates: 0,
         score: 0
+      }
+    }
+  };
+}
+
+function generateModelGuidedSeating(rows, benchesPerRow, seatsPerBench, capacity, totalStudents, basePool, mlContext) {
+  const seating = createEmptySeating(rows, benchesPerRow, seatsPerBench);
+  const studentPool = rankStudentsByModelRisk(basePool, mlContext.studentRiskById || {});
+  const placedSeats = [];
+
+  for (let row = 0; row < rows; row++) {
+    for (let bench = 0; bench < benchesPerRow; bench++) {
+      for (let seat = 0; seat < seatsPerBench; seat++) {
+        if (!studentPool.length) break;
+        const candidateResult = pickGreedyCandidate(studentPool, row, bench, seat, seating, placedSeats, mlContext);
+        if (!candidateResult) continue;
+        const { student, risk } = candidateResult;
+        seating[row][bench][seat] = sanitizeStudent(student);
+        placedSeats.push({ row, bench, seat, student, risk });
+        const idx = studentPool.findIndex((item) => String(item._id) === String(student._id));
+        if (idx >= 0) studentPool.splice(idx, 1);
+      }
+    }
+  }
+
+  const benchViolations = collectBenchViolations(seating);
+  const violationSummary = summarizeBenchViolations(benchViolations);
+  return {
+    seating,
+    report: {
+      model: "trained-logistic-student-risk-v1",
+      placed: placedSeats.length,
+      requested: totalStudents,
+      maxCapacity: capacity,
+      unseated: Math.max(totalStudents - capacity, 0),
+      averagePairRisk: average(placedSeats.map((item) => item.risk)),
+      sameClassBenchViolations: violationSummary.sameClassCount,
+      sameStreamBenchViolations: violationSummary.sameStreamCount,
+      totalBenchViolations: violationSummary.totalCount,
+      benchViolations,
+      machineLearning: {
+        strategy: mlContext.kind,
+        sampleCount: mlContext.training.sampleCount,
+        positiveLabels: mlContext.training.positiveLabels,
+        negativeLabels: mlContext.training.negativeLabels,
+        epochs: mlContext.training.epochs,
+        loss: mlContext.training.loss,
+        accuracy: mlContext.training.accuracy,
+        averagePredictedRisk: mlContext.training.averagePredictedRisk,
+        fallbackReason: mlContext.training.fallbackReason || ""
       }
     }
   };
@@ -167,10 +247,17 @@ function pickReinforcementCandidate(pool, row, bench, seat, seating, placedSeats
   if (!pool.length) return null;
 
   const benchOccupants = (seating[row]?.[bench] || []).filter(Boolean);
-  const hardSafeCandidates = pool.filter(
+  const classSafeCandidates = pool.filter(
     (student) => !benchOccupants.some((peer) => peer.className && peer.className === student.className)
   );
-  const candidatePool = hardSafeCandidates.length ? hardSafeCandidates : pool;
+  const streamSafeCandidates = pool.filter(
+    (student) => !benchOccupants.some((peer) => sameAcademicStream(peer, student))
+  );
+  const candidatePool = streamSafeCandidates.length
+    ? streamSafeCandidates
+    : classSafeCandidates.length
+        ? classSafeCandidates
+        : pool;
   const seatKey = seatStateKey(row, bench, seat);
 
   let bestCandidate = null;
@@ -208,10 +295,17 @@ function pickGreedyCandidate(pool, row, bench, seat, seating, placedSeats, featu
   if (!pool.length) return null;
 
   const benchOccupants = (seating[row]?.[bench] || []).filter(Boolean);
-  const hardSafeCandidates = pool.filter(
+  const classSafeCandidates = pool.filter(
     (student) => !benchOccupants.some((peer) => peer.className && peer.className === student.className)
   );
-  const candidatePool = hardSafeCandidates.length ? hardSafeCandidates : pool;
+  const streamSafeCandidates = pool.filter(
+    (student) => !benchOccupants.some((peer) => sameAcademicStream(peer, student))
+  );
+  const candidatePool = streamSafeCandidates.length
+    ? streamSafeCandidates
+    : classSafeCandidates.length
+        ? classSafeCandidates
+        : pool;
 
   let bestStudent = null;
   let bestScore = Number.POSITIVE_INFINITY;
@@ -251,26 +345,34 @@ function getNeighborStudents(row, bench, seat, seating, placedSeats) {
   return neighbors;
 }
 
-function computeLocalSeatScore(student, row, bench, seat, seating, placedSeats, featureMap) {
+function computeLocalSeatScore(student, row, bench, seat, seating, placedSeats, scoringContext) {
   const benchOccupants = (seating[row]?.[bench] || []).filter(Boolean);
   const neighbors = getNeighborStudents(row, bench, seat, seating, placedSeats);
-  const scores = neighbors.map((n) => pairRiskScore(student, n.student, featureMap) * n.weight);
+  const scores = neighbors.map((neighbor) => scoringContext.pairRisk(student, neighbor.student) * neighbor.weight);
   const sameClassBenchPenalty = benchOccupants.some(
     (peer) => peer.className && peer.className === student.className
   )
-    ? 100
+    ? scoringContext.sameClassBenchPenalty
+    : 0;
+  const sameStreamBenchPenalty = benchOccupants.some((peer) => sameAcademicStream(peer, student))
+    ? scoringContext.sameStreamBenchPenalty
     : 0;
   const nearbySameClassPenalty = neighbors.some(
     (neighbor) => neighbor.student.className && neighbor.student.className === student.className
   )
-    ? 0.8
+    ? scoringContext.nearbySameClassPenalty
+    : 0;
+  const nearbySameStreamPenalty = neighbors.some((neighbor) => sameAcademicStream(neighbor.student, student))
+    ? scoringContext.nearbySameStreamPenalty
     : 0;
   return (scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0) +
     sameClassBenchPenalty +
-    nearbySameClassPenalty;
+    sameStreamBenchPenalty +
+    nearbySameClassPenalty +
+    nearbySameStreamPenalty;
 }
 
-function evaluateSeatingScore(seating, featureMap) {
+function evaluateSeatingScore(seating, scoringContext) {
   let totalRisk = 0;
   let occupiedSeats = 0;
 
@@ -280,12 +382,12 @@ function evaluateSeatingScore(seating, featureMap) {
         const student = seating[row][bench][seat];
         if (!student) continue;
         occupiedSeats += 1;
-        totalRisk += computeLocalSeatScore(student, row, bench, seat, seating, [], featureMap);
+        totalRisk += computeLocalSeatScore(student, row, bench, seat, seating, [], scoringContext);
       }
     }
   }
 
-  const benchViolations = collectBenchViolations(seating).length;
+  const benchViolations = summarizeBenchViolations(collectBenchViolations(seating)).totalCount;
   const normalizedRisk = occupiedSeats ? totalRisk / occupiedSeats : 0;
   return normalizedRisk + benchViolations * 25;
 }
@@ -294,13 +396,32 @@ function collectBenchViolations(seating) {
   const benchViolations = [];
   for (let row = 0; row < seating.length; row++) {
     for (let bench = 0; bench < seating[row].length; bench++) {
-      const classes = seating[row][bench].filter(Boolean).map((student) => student.className).filter(Boolean);
-      if (new Set(classes).size !== classes.length) {
-        benchViolations.push({ row: row + 1, bench: bench + 1 });
+      const occupants = seating[row][bench].filter(Boolean);
+      const classes = occupants.map((student) => student.className).filter(Boolean);
+      const streams = occupants.map((student) => student.className).filter(Boolean);
+      const hasSameClass = new Set(classes).size !== classes.length;
+      const hasSameStream = streams.some((current, index) =>
+        streams.some((other, otherIndex) => otherIndex !== index && sameAcademicStream(current, other))
+      );
+      if (hasSameClass || hasSameStream) {
+        benchViolations.push({
+          row: row + 1,
+          bench: bench + 1,
+          sameClass: hasSameClass,
+          sameStream: hasSameStream
+        });
       }
     }
   }
   return benchViolations;
+}
+
+function summarizeBenchViolations(benchViolations) {
+  return {
+    totalCount: benchViolations.length,
+    sameClassCount: benchViolations.filter((item) => item.sameClass).length,
+    sameStreamCount: benchViolations.filter((item) => item.sameStream).length
+  };
 }
 
 function seatStateKey(row, bench, seat) {
@@ -323,6 +444,30 @@ function shuffle(items) {
     [items[i], items[j]] = [items[j], items[i]];
   }
   return items;
+}
+
+function createHeuristicScoringContext(featureMap) {
+  return {
+    kind: "heuristic",
+    sameClassBenchPenalty: 100,
+    sameStreamBenchPenalty: 70,
+    nearbySameClassPenalty: 0.8,
+    nearbySameStreamPenalty: 0.7,
+    pairRisk(studentA, studentB) {
+      return pairRiskScore(studentA, studentB, featureMap);
+    }
+  };
+}
+
+function rankStudentsByModelRisk(students, studentRiskById) {
+  return students.slice().sort((left, right) => {
+    const leftRisk = Number(studentRiskById[String(left._id || left.id || "")] || 0);
+    const rightRisk = Number(studentRiskById[String(right._id || right.id || "")] || 0);
+    if (rightRisk !== leftRisk) return rightRisk - leftRisk;
+    const leftRoll = Number(left.rollNumber || 0);
+    const rightRoll = Number(right.rollNumber || 0);
+    return leftRoll - rightRoll;
+  });
 }
 
 function sanitizeStudent(student) {
@@ -348,8 +493,11 @@ function normalizeStoredSeating(seating) {
 }
 
 function findStudentSeat(seating, studentId) {
+  if (!Array.isArray(seating)) return null;
   for (let row = 0; row < seating.length; row++) {
+    if (!Array.isArray(seating[row])) continue;
     for (let bench = 0; bench < seating[row].length; bench++) {
+      if (!Array.isArray(seating[row][bench])) continue;
       for (let seat = 0; seat < seating[row][bench].length; seat++) {
         const student = seating[row][bench][seat];
         if (student && String(student._id || student.id) === String(studentId)) {

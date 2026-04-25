@@ -3,7 +3,10 @@ const Classroom = require("../models/classroom");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
-const JWT_SECRET = process.env.JWT_SECRET || "change_this";
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET environment variable is required");
+}
 const TOKEN_EXPIRES = process.env.TOKEN_EXPIRES_IN || "24h";
 
 async function register(req, res) {

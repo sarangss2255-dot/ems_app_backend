@@ -21,6 +21,7 @@ const ClassroomSchema = new Schema({
   pattern: { type: String, enum: ["normal","gap","zigzag"], default: "normal" },
   gap: { type: Number, default: 0 },
   classesAllowed: { type: [String], default: [] }, // multiple classes
+  activeExamClasses: { type: [String], default: [] },
   seatingPlan: { type: [[[SeatedStudentSchema]]], default: [] },
   antiCheatReport: { type: Schema.Types.Mixed, default: null },
   seatingGeneratedAt: { type: Date, default: null },

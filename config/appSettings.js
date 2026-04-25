@@ -46,7 +46,7 @@ For questions about these terms, please contact the system administrator.`,
   allowTeacherLogin: true,
   examDurationBuffer: 15,
   defaultPassword: "pass123",
-  seatingStrategy: "reinforcement-guided"
+  seatingStrategy: "trained-ml"
 };
 
 function getAppSettings() {
